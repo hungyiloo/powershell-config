@@ -15,5 +15,15 @@ Set-Alias -Name cat -Value bat
 # set up zoxide "z" command to replace "cd"
 Invoke-Expression (& { (zoxide init powershell --cmd cd | Out-String) })
 
-# PowerToys CommandNotFound module
+#f45873b3-b655-43a6-b217-97c00aa0db58 PowerToys CommandNotFound module
 Import-Module -Name Microsoft.WinGet.CommandNotFound
+#f45873b3-b655-43a6-b217-97c00aa0db58
+
+# a convenience command for refreshing PATH
+function Reset-Path 
+{ 
+  $env:PATH = 
+    [System.Environment]::GetEnvironmentVariable("Path","Machine") + 
+    ";" + 
+    [System.Environment]::GetEnvironmentVariable("Path","User") 
+}
