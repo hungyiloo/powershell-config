@@ -31,7 +31,7 @@
         },
         {
           "background": "transparent",
-          "foreground": "#585b70",
+          "foreground": "#6c7086",
           "style": "plain",
           "template": "{{ if .WSL }}\uebcc {{ end }}{{.Icon}} ",
           "type": "os"
@@ -44,7 +44,7 @@
           "type": "session"
         },
         {
-          "background": "#313244",
+          "background": "#45475a",
           "foreground": "#cdd6f4",
           "properties": {
             "folder_icon": "\u2026",
