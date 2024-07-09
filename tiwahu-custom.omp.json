@@ -122,7 +122,7 @@
       "newline": true,
       "segments": [
         {
-          "foreground": "#89b4fa",
+          "foreground": "#74c7ec",
           "style": "plain",
           "template": "{{ .Name }} ",
           "type": "shell",
