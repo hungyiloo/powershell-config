@@ -27,4 +27,3 @@ function Reset-Path
     ";" + 
     [System.Environment]::GetEnvironmentVariable("Path","User") 
 }
-
