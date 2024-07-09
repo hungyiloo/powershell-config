@@ -5,36 +5,36 @@
       "alignment": "left",
       "segments": [
         {
-          "background": "#89b4fa",
-          "foreground": "#021431",
+          "background": "transparent",
+          "foreground": "#a6e3a1",
           "properties": {
             "style": "austin",
             "threshold": 321
           },
           "style": "plain",
-          "template": " {{ .FormattedMs }} ",
+          "template": "\uf2f2 {{ .FormattedMs }} ",
           "type": "executiontime"
         },
         {
-          "background": "#f38ba8",
-          "foreground": "#2e0511",
+          "background": "transparent",
+          "foreground": "#f38ba8",
           "style": "plain",
-          "template": "{{ if gt .Code 0 }} {{ .Code }} {{ end }}",
+          "template": "{{ if gt .Code 0 }}\uea87 {{ .Code }} {{ end }}",
           "type": "status"
         },
         {
-          "background": "#fab387",
-          "foreground": "#311402",
-          "style": "plain",
-          "template": " \uf0e7 ",
-          "type": "root"
-        },
-        {
           "background": "transparent",
-          "foreground": "#6c7086",
+          "foreground": "#cdd6f4",
           "style": "plain",
           "template": "{{ if .WSL }}\uebcc {{ end }}{{.Icon}} ",
           "type": "os"
+        },
+        {
+          "background": "#fab387",                                                
+          "foreground": "#311402", 
+          "style": "plain",
+          "template": " \uf0e7 ",
+          "type": "root"
         },
         {
           "background": "#181825",
