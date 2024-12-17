@@ -2,11 +2,11 @@
 oh-my-posh init pwsh --config '~\OneDrive\Documents\PowerShell\tiwahu-custom.omp.json' | Invoke-Expression
 
 # use eza to replace "ls" and also define convenience "ll" and "la" shortcuts
-function Invoke-My-Ls { eza --icons=always --color=always $args }
+function Invoke-My-Ls { eza --icons=always --color=auto $args }
 Set-Alias -Name ls -Value Invoke-My-Ls
-function Invoke-My-Ll { eza --icons=always --color=always -l $args }
+function Invoke-My-Ll { eza --icons=always --color=auto -l $args }
 Set-Alias -Name ll -Value Invoke-My-Ll
-function Invoke-My-La { eza --icons=always --color=always -la $args }
+function Invoke-My-La { eza --icons=always --color=auto -la $args }
 Set-Alias -Name la -Value Invoke-My-La
 
 # set up "bat" to replace "cat"
@@ -27,3 +27,7 @@ function Reset-Path
     ";" + 
     [System.Environment]::GetEnvironmentVariable("Path","User") 
 }
+
+# PSFzf setup
+Set-PsFzfOption -PSReadlineChordProvider 'Ctrl+t' -PSReadlineChordReverseHistory 'Ctrl+r'
+Set-PSReadLineKeyHandler -Key Tab -ScriptBlock { Invoke-FzfTabCompletion }
