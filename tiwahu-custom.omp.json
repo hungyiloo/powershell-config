@@ -2,64 +2,78 @@
   "$schema": "https://raw.githubusercontent.com/JanDeDobbeleer/oh-my-posh/main/themes/schema.json",
   "blocks": [
     {
+      "type": "prompt",
       "alignment": "left",
       "segments": [
         {
-          "background": "transparent",
-          "foreground": "#a6e3a1",
           "properties": {
+            "cache_duration": "none",
             "style": "austin",
             "threshold": 321
           },
-          "style": "plain",
           "template": "\uf2f2 {{ .FormattedMs }} ",
-          "type": "executiontime"
-        },
-        {
+          "foreground": "#a6e3a1",
           "background": "transparent",
-          "foreground": "#f38ba8",
-          "style": "plain",
-          "template": "{{ if gt .Code 0 }}\uea87 {{ .Code }} {{ end }}",
-          "type": "status"
+          "type": "executiontime",
+          "style": "plain"
         },
         {
-          "background": "transparent",
-          "foreground": "#cdd6f4",
-          "style": "plain",
-          "template": "{{ if .WSL }}\uebcc {{ end }}{{.Icon}} ",
-          "type": "os"
-        },
-        {
-          "background": "#fab387",                                                
-          "foreground": "#311402", 
-          "style": "plain",
-          "template": " \uf0e7 ",
-          "type": "root"
-        },
-        {
-          "background": "#181825",
-          "foreground": "#cdd6f4",
-          "style": "plain",
-          "template": "{{ if .SSHSession }}\ueba9 {{ .UserName }}@{{ .HostName }} {{ end }}",
-          "type": "session"
-        },
-        {
-          "background": "#45475a",
-          "foreground": "#cdd6f4",
           "properties": {
+            "cache_duration": "none"
+          },
+          "template": "{{ if gt .Code 0 }}\uea87 {{ .Code }} {{ end }}",
+          "foreground": "#f38ba8",
+          "background": "transparent",
+          "type": "status",
+          "style": "plain"
+        },
+        {
+          "properties": {
+            "cache_duration": "none"
+          },
+          "template": "{{ if .WSL }}\uebcc {{ end }}{{.Icon}} ",
+          "foreground": "#cdd6f4",
+          "background": "transparent",
+          "type": "os",
+          "style": "plain"
+        },
+        {
+          "properties": {
+            "cache_duration": "none"
+          },
+          "template": " \uf0e7 ",
+          "foreground": "#311402",
+          "background": "#fab387",
+          "type": "root",
+          "style": "plain"
+        },
+        {
+          "properties": {
+            "cache_duration": "none"
+          },
+          "template": "{{ if .SSHSession }}\ueba9 {{ .UserName }}@{{ .HostName }} {{ end }}",
+          "foreground": "#cdd6f4",
+          "background": "#181825",
+          "type": "session",
+          "style": "plain"
+        },
+        {
+          "properties": {
+            "cache_duration": "none",
             "folder_icon": "\u2026",
             "max_width": 50,
             "style": "powerlevel"
           },
-          "style": "plain",
           "template": " {{ .Path }} ",
-          "type": "path"
+          "foreground": "#cdd6f4",
+          "background": "#45475a",
+          "type": "path",
+          "style": "plain"
         },
         {
-          "background": "#94e2d5",
-          "foreground": "#0b2823",
           "properties": {
             "branch_icon": "\ue725 ",
+            "cache_duration": "none",
             "cherry_pick_icon": "\ue29b ",
             "commit_icon": "\uf417 ",
             "fetch_status": false,
@@ -70,78 +84,84 @@
             "revert_icon": "\uf0e2 ",
             "tag_icon": "\uf412 "
           },
-          "style": "plain",
           "template": " {{ .HEAD }} ",
-          "type": "git"
+          "foreground": "#0b2823",
+          "background": "#94e2d5",
+          "type": "git",
+          "style": "plain"
         },
         {
-          "background": "#cba6f7",
-          "foreground": "#17042f",
           "properties": {
+            "cache_duration": "none",
             "fetch_version": false
           },
-          "style": "plain",
           "template": " \ue77f ",
-          "type": "dotnet"
+          "foreground": "#17042f",
+          "background": "#cba6f7",
+          "type": "dotnet",
+          "style": "plain"
         },
         {
-          "background": "#74c7ec",
-          "foreground": "#06212d",
           "properties": {
+            "cache_duration": "none",
             "fetch_version": false
           },
-          "style": "plain",
           "template": " \ue626 ",
-          "type": "go"
+          "foreground": "#06212d",
+          "background": "#74c7ec",
+          "type": "go",
+          "style": "plain"
         },
         {
-          "background": "#f2cdcd",
-          "foreground": "#280b0b",
           "properties": {
+            "cache_duration": "none",
             "fetch_version": false
           },
-          "style": "plain",
           "template": " \ue235 ",
-          "type": "python"
+          "foreground": "#280b0b",
+          "background": "#f2cdcd",
+          "type": "python",
+          "style": "plain"
         },
         {
-          "background": "#f9e2af",
-          "foreground": "#181102",
           "properties": {
+            "cache_duration": "none",
             "fetch_version": false
           },
-          "style": "plain",
           "template": " \ue7a8 ",
-          "type": "rust"
+          "foreground": "#181102",
+          "background": "#f9e2af",
+          "type": "rust",
+          "style": "plain"
         }
-      ],
-      "type": "prompt"
+      ]
     },
     {
+      "type": "prompt",
       "alignment": "left",
-      "newline": true,
       "segments": [
         {
-          "foreground": "#74c7ec",
-          "style": "plain",
-          "template": "{{ .Name }} ",
-          "type": "shell",
           "properties": {
+            "cache_duration": "none",
             "mapped_shell_names": {
-              "pwsh": "\u276f",
-              "shell": "\u276f",
+              "bash": "$",
               "cmd": ">",
+              "fish": "~>",
               "lua": ">",
               "nu": ":)",
-              "fish": "~>",
-              "zsh": "%",
-              "bash": "$"
+              "pwsh": "❯",
+              "shell": "❯",
+              "zsh": "%"
             }
-          }
+          },
+          "template": "{{ .Name }} ",
+          "foreground": "#74c7ec",
+          "type": "shell",
+          "style": "plain"
         }
       ],
-      "type": "prompt"
+      "newline": true
     }
   ],
-  "version": 2
+  "version": 3
 }
