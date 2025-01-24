@@ -1,5 +1,8 @@
 # init oh-my-posh and set a custom theme
-oh-my-posh init pwsh --config '~\OneDrive\Documents\PowerShell\tiwahu-custom.omp.json' | Invoke-Expression
+oh-my-posh init pwsh --config '~\Documents\PowerShell\tiwahu-custom.omp.json' | Invoke-Expression
+
+# ensure modules in the local Documents PowerShell folder can be found
+$env:PSModulePath = $env:PSModulePath + ";$env:UserProfile/Documents/PowerShell/Modules"
 
 # use eza to replace "ls" and also define convenience "ll" and "la" shortcuts
 function Invoke-My-Ls { eza --icons=always --color=auto $args }
