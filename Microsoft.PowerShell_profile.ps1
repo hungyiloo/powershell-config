@@ -15,6 +15,9 @@ Set-Alias -Name la -Value Invoke-My-La
 # set up "bat" to replace "cat"
 Set-Alias -Name cat -Value bat
 
+# set up shortcut for lazygit
+Set-Alias -Name lg -Value lazygit
+
 # set up zoxide "z" command to replace "cd"
 Invoke-Expression (& { (zoxide init powershell --cmd cd | Out-String) })
 
