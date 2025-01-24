@@ -1,3 +1,14 @@
+# NOTE:
+# This file should go in ~\Documents\PowerShell\
+# even though the normal profile dir is ~\OneDrive\Documents\PowerShell\
+# This prevents PowerShell junk from being uploaded into OneDrive.
+# ---
+# In the OneDrive profile dir, make sure you have a
+# Microsoft.PowerShell_profile.ps1 file to do a redirect:
+#
+# $profile = "$env:UserProfile/Documents/PowerShell/Microsoft.PowerShell_profile.ps1"
+# .$profile
+
 # init oh-my-posh and set a custom theme
 oh-my-posh init pwsh --config '~\Documents\PowerShell\tiwahu-custom.omp.json' | Invoke-Expression
 
