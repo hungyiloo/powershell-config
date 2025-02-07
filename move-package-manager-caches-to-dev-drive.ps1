@@ -31,7 +31,7 @@ Move-Item-If-Exists -Path $env:LocalAppData\npm-cache -Destination $PackagesPath
 Move-Item-If-Exists -Path $env:UserProfile\.nuget -Destination $PackagesPath
 
 # Move cargo packages
-Move-Item-If-Exists -Path $env:UserProfile\cargo -Destination $PackagesPath
+Move-Item-If-Exists -Path $env:UserProfile\.cargo -Destination $PackagesPath
 
 # Move python/pip packages
 Move-Item-If-Exists -Path $env:LocalAppData\pip -Destination $PackagesPath
@@ -49,7 +49,7 @@ Move-Item-If-Exists -Path $env:UserProfile\.gradle -Destination $PackagesPath
 Write-Output "Setting environment variables..."
 [Environment]::SetEnvironmentVariable("npm_config_cache", "$PackagesPath\npm-cache", "User")
 [Environment]::SetEnvironmentVariable("NUGET_PACKAGES", "$PackagesPath\.nuget\packages", "User")
-[Environment]::SetEnvironmentVariable("CARGO", "$PackagesPath\cargo", "User")
+[Environment]::SetEnvironmentVariable("CARGO_HOME", "$PackagesPath\.cargo", "User")
 [Environment]::SetEnvironmentVariable("PIP_CACHE_DIR", "$PackagesPath\pip", "User")
 [Environment]::SetEnvironmentVariable("VCPKG_DEFAULT_BINARY_CACHE", "$PackagesPath\vcpkg", "User")
 [Environment]::SetEnvironmentVariable("MAVEN_OPTS", "-Dmaven.repo.local=$PackagesPath\.m2 $env:MAVEN_OPTS", "User")
