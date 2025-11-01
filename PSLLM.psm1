@@ -7,7 +7,7 @@
 $script:ApiEndpoint = ($env:LLM_API_ENDPOINT ?? "https://api.openai.com/v1") + "/chat/completions"
 
 # Model configuration
-$script:DefaultModel = $env:LLM_MODEL ?? "Qwen/Qwen3-Next-80B-A3B-Instruct"
+$script:DefaultModel = $env:LLM_MODEL ?? "qwen/qwen3-coder"
 
 # Maximum tokens for response
 $script:MaxTokens = 150
@@ -25,6 +25,8 @@ function Get-LLMCommand
     Queries LLM API and returns a PowerShell command
     .PARAMETER Description
     Natural language description of the command you want
+    .PARAMETER Context
+    Additional context to provide to the LLM for more accurate command generation
     .PARAMETER ApiEndpoint
     Override the default API endpoint
     .PARAMETER Model
@@ -33,11 +35,16 @@ function Get-LLMCommand
     Get-LLMCommand "list all running processes sorted by memory"
     .EXAMPLE
     Get-LLMCommand "rename all .txt files to .bak" -Model "gpt-4"
+    .EXAMPLE
+    Get-LLMCommand "generate summary" -Context "Recent commits: abc123 fix bug, def456 add feature"
     #>
   [CmdletBinding()]
   param(
     [Parameter(Mandatory=$true)]
     [string]$Description,
+
+    [Parameter(Mandatory=$false)]
+    [string]$Context,
 
     [Parameter(Mandatory=$false)]
     [string]$ApiEndpoint = $script:ApiEndpoint,
@@ -60,6 +67,8 @@ function Get-LLMCommand
     $systemPrompt = @"
 You are a PowerShell and CLI expert assistant. Generate ONLY the command(s) that accomplish the user's request.
 
+$(-not [string]::IsNullOrWhiteSpace($Context) ? "Context provided: $Context`n" : "")
+
 Rules:
 - Return ONLY the command code, no explanations
 - Return ONLY ONE SOLUTION; it may be multiple commands, but *never return more than one way to do the same thing*
@@ -72,6 +81,15 @@ Rules:
 - Handle common edge cases (quoted paths, error handling) appropriately
 "@
 
+    # Construct the user message
+    $userMessage = if (-not [string]::IsNullOrWhiteSpace($Context))
+    {
+      "PowerShell command to: $Description (using the provided context)"
+    } else
+    {
+      "PowerShell command to: $Description"
+    }
+
     # Prepare the request body
     $requestBody = @{
       model = $Model
@@ -82,7 +100,7 @@ Rules:
         }
         @{
           role = "user"
-          content = "PowerShell command to: $Description"
+          content = $userMessage
         }
       )
       max_tokens = $script:MaxTokens
@@ -129,9 +147,13 @@ Rules:
     Write-Host $_.Exception
 
     # Use generic LLM name since we support multiple providers
-    $providerName = if ($ApiEndpoint -match "openai") { "OpenAI" }
-    elseif ($ApiEndpoint -match "nanogpt") { "NanoGPT" }
-    else { "LLM API" }
+    $providerName = if ($ApiEndpoint -match "openai")
+    { "OpenAI" 
+    } elseif ($ApiEndpoint -match "nanogpt")
+    { "NanoGPT" 
+    } else
+    { "LLM API" 
+    }
 
     Write-Error "Failed to get command from $providerName"
     return $null
