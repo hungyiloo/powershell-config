@@ -59,3 +59,6 @@ function y {
   }
   Remove-Item -Path $tmp
 }
+
+# PSLLM setup
+. "$(Split-Path -Path $PROFILE -Parent)\PSLLM-Profile.ps1"
