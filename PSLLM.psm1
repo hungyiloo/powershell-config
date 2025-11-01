@@ -7,7 +7,7 @@
 $script:ApiEndpoint = ($env:LLM_API_ENDPOINT ?? "https://api.openai.com/v1") + "/chat/completions"
 
 # Model configuration
-$script:DefaultModel = $env:LLM_MODEL ?? "z-ai/glm-4.6"
+$script:DefaultModel = $env:LLM_MODEL ?? "Qwen/Qwen3-Next-80B-A3B-Instruct"
 
 # Maximum tokens for response
 $script:MaxTokens = 150
@@ -62,6 +62,7 @@ You are a PowerShell and CLI expert assistant. Generate ONLY the command(s) that
 
 Rules:
 - Return ONLY the command code, no explanations
+- Return ONLY ONE SOLUTION; it may be multiple commands, but *never return more than one way to do the same thing*
 - Assume a pwsh environment, e.g. don't use bash piping
 - use pwsh functions and cmdlets by default, unless told otherwise
 - Keep commands concise and idiomatic
@@ -216,7 +217,7 @@ function Invoke-LLMCompletion
 
   # Clear loading line
   [System.Console]::SetCursorPosition(0, [System.Console]::CursorTop)
-  Write-Host (" " * ([System.Console]::WindowWidth - 1)) -NoNewline
+  Write-Host ("🔸" + (" " * ([System.Console]::WindowWidth - 2))) -NoNewline
   [System.Console]::SetCursorPosition(0, [System.Console]::CursorTop)
 
   if ($null -eq $generatedCommand)
@@ -263,7 +264,7 @@ function Invoke-LLMCompleteCurrentLine
 
   # Clear loading line
   [System.Console]::SetCursorPosition(0, [System.Console]::CursorTop)
-  Write-Host (" " * ([System.Console]::WindowWidth - 1)) -NoNewline
+  Write-Host ("🔸" + (" " * ([System.Console]::WindowWidth - 2))) -NoNewline
   [System.Console]::SetCursorPosition(0, [System.Console]::CursorTop)
 
   if ($null -eq $generatedCommand)
