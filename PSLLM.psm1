@@ -280,6 +280,5 @@ function Invoke-LLMCompleteCurrentLine
 Export-ModuleMember -Function @(
   'Get-LLMCommand',
   'Invoke-LLMCompletion',
-  'Invoke-LLMCompleteCurrentLine',
-  'Get-PSConsoleReadLineBufferState'
+  'Invoke-LLMCompleteCurrentLine'
 )
