@@ -13,12 +13,7 @@ if (-not $env:LLM_API_KEY)
 }
 
 # PSReadLine key bindings for LLM completion
-# Ctrl+Alt+L: Interactive LLM command generation
-Set-PSReadLineKeyHandler -Chord 'Ctrl+Alt+L' -BriefDescription 'LLMCompletion' -ScriptBlock {
-  Invoke-LLMCompletion
-}
-
-# Ctrl+Alt+K: Complete current line with LLM
-Set-PSReadLineKeyHandler -Chord 'Ctrl+Alt+K' -BriefDescription 'LLMCompleteCurrent' -ScriptBlock {
-  Invoke-LLMCompleteCurrentLine
+# Ctrl+Alt+L: Complete current line with LLM (primary method)
+Set-PSReadLineKeyHandler -Chord 'Ctrl+Alt+L' -BriefDescription 'LLMCompleteCurrent' -ScriptBlock {
+    Invoke-LLMCompleteCurrentLine
 }

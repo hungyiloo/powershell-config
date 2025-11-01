@@ -175,62 +175,7 @@ function Invoke-InsertPSConsoleReadLineText
   [Microsoft.PowerShell.PSConsoleReadLine]::Insert($TextToInsert)
 }
 
-# Core interactive function
-function Invoke-LLMCompletion
-{
-  <#
-    .SYNOPSIS
-    Interactive LLM command completion that replaces current line
-    .DESCRIPTION
-    Prompts for natural language description, gets command from LLM,
-    and replaces the current command line buffer
-    #>
-  [CmdletBinding()]
-  param()
-
-  # Get current buffer state
-  $bufferState = Get-PSConsoleReadLineBufferState
-  $currentLine = $bufferState.Line
-
-  # If current line has text, use it as initial prompt
-  $initialPrompt = if ([string]::IsNullOrWhiteSpace($currentLine))
-  {
-    ""
-  } else
-  {
-    $currentLine
-  }
-
-  # Prompt user for description
-  $description = Read-Host -Prompt "Describe command$(if($initialPrompt) { " (current: $initialPrompt)" })"
-
-  if ([string]::IsNullOrWhiteSpace($description))
-  {
-    return  # User cancelled
-  }
-
-  # Show loading indicator
-  Write-Host "🤖 Querying LLM..." -ForegroundColor Yellow -NoNewline
-
-  # Get command from LLM
-  $generatedCommand = Get-LLMCommand -Description $description
-
-  # Clear loading line
-  [System.Console]::SetCursorPosition(0, [System.Console]::CursorTop)
-  Write-Host ("🔸" + (" " * ([System.Console]::WindowWidth - 2))) -NoNewline
-  [System.Console]::SetCursorPosition(0, [System.Console]::CursorTop)
-
-  if ($null -eq $generatedCommand)
-  {
-    Write-Host "❌ Failed to generate command" -ForegroundColor Red
-    return
-  }
-
-  # Replace entire current line with generated command
-  Invoke-ReplacePSConsoleReadLineText -Start 0 -Length $currentLine.Length -ReplacementText $generatedCommand
-}
-
-# Convenience function for current line completion
+# Current line completion function
 function Invoke-LLMCompleteCurrentLine
 {
   <#
@@ -280,6 +225,5 @@ function Invoke-LLMCompleteCurrentLine
 # Export functions
 Export-ModuleMember -Function @(
   'Get-LLMCommand',
-  'Invoke-LLMCompletion',
   'Invoke-LLMCompleteCurrentLine'
 )
