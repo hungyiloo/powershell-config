@@ -200,7 +200,7 @@ function Get-LLMResponse
       # Construct the system prompt with context
       $finalSystemPrompt = if (-not [string]::IsNullOrWhiteSpace($contextString))
       {
-        "$SystemPrompt`n`nContext provided: $contextString"
+        "$SystemPrompt`n`n<IMPORTANT_CONTEXT_PROVIDED>`n$contextString`n</IMPORTANT_CONTEXT_PROVIDED>"
       } else {
         $SystemPrompt
       }
@@ -339,6 +339,18 @@ function Get-LLMCommand
     [string]$Model = $script:DefaultModel
   )
 
+  begin {
+    # Collect pipeline context
+    $collectedPipelineContext = @()
+  }
+
+  process {
+    # Collect pipeline objects
+    if ($PipelineContext) {
+      $collectedPipelineContext += $PipelineContext
+    }
+  }
+
   end {
     # Construct the system prompt for PowerShell commands
     $systemPrompt = @"
@@ -360,10 +372,14 @@ Rules:
 "@
 
     # Construct the user message
-    $userMessage = "Generate a command to: $Description"
+      $userMessage = if (-not [string]::IsNullOrWhiteSpace($collectedPipelineContext) || -not [string]::IsNullOrWhiteSpace($Context)) {
+        "Generate a command to: $Description (YOU MUST CONSIDER THE IMPORTANT_CONTEXT_PROVIDED)"
+      } else {
+        "Generate a command to: $Description"
+      }
 
     # Get response from the base function
-    $rawResponse = Get-LLMResponse -UserMessage $userMessage -SystemPrompt $systemPrompt -Context $Context -PipelineContext $PipelineContext -ApiEndpoint $ApiEndpoint -Model $Model
+    $rawResponse = Get-LLMResponse -UserMessage $userMessage -SystemPrompt $systemPrompt -Context $Context -PipelineContext $collectedPipelineContext -ApiEndpoint $ApiEndpoint -Model $Model
 
     if ($null -eq $rawResponse) {
       return $null
