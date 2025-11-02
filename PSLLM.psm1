@@ -7,6 +7,11 @@
 $script:LastLLMCommand = $null
 $script:LLMCommandHistory = @()
 $script:MaxHistorySize = 50
+
+# Session state - dead simple implementation
+$script:ActiveSession = $false
+$script:SessionHistory = @()
+$script:MaxSessionMessages = 10
 #endregion
 
 #region Configuration
@@ -22,6 +27,81 @@ $script:MaxTokens = 150
 # Request timeout in seconds
 $script:RequestTimeout = 15
 #endregion
+
+function Start-LLMSession
+{
+  <#
+    .SYNOPSIS
+    Start a conversational session with context persistence
+    .DESCRIPTION
+    Enables conversation history across multiple LLM calls
+    .PARAMETER InitialContext
+    Optional initial context to set the stage for the conversation
+    .EXAMPLE
+    Start-LLMSession
+    .EXAMPLE
+    Start-LLMSession -InitialContext "I'm debugging a web API issue"
+    #>
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory=$false)]
+    [string]$InitialContext
+  )
+
+  $script:ActiveSession = $true
+  $script:SessionHistory = @()
+
+  if (-not [string]::IsNullOrWhiteSpace($InitialContext)) {
+    $script:SessionHistory += @{
+      role = "system"
+      content = "Context for this session: $InitialContext"
+    }
+  }
+
+  Write-Host "🤖 LLM Session started" -ForegroundColor Green
+}
+
+function Stop-LLMSession
+{
+  <#
+    .SYNOPSIS
+    Stop the current LLM session and clear history
+    .DESCRIPTION
+    Ends the conversational session and clears all stored context
+    #>
+  [CmdletBinding()]
+  param()
+
+  $script:ActiveSession = $false
+  $script:SessionHistory = @()
+  Write-Host "🤖 LLM Session stopped" -ForegroundColor Yellow
+}
+
+function Get-LLMSessionStatus
+{
+  <#
+    .SYNOPSIS
+    Get the current session status and message count
+    .DESCRIPTION
+    Returns information about the active session state
+    #>
+  [CmdletBinding()]
+  param()
+
+  if ($script:ActiveSession) {
+    return @{
+      Active = $true
+      MessageCount = $script:SessionHistory.Count
+      MaxMessages = $script:MaxSessionMessages
+    }
+  } else {
+    return @{
+      Active = $false
+      MessageCount = 0
+      MaxMessages = $script:MaxSessionMessages
+    }
+  }
+}
 
 function Get-LLMResponse
 {
@@ -125,19 +205,41 @@ function Get-LLMResponse
         $SystemPrompt
       }
 
+      # Build messages array with session history if active
+      $messages = @()
+
+      if ($script:ActiveSession) {
+        # Add session history first
+        $messages += $script:SessionHistory
+        
+        # Create and add current user message to both messages and session history
+        $currentMessage = @{role="user"; content=$UserMessage}
+        $messages += $currentMessage
+        $script:SessionHistory += $currentMessage
+        
+        # Trim history if needed (hard cutoff)
+        if ($script:SessionHistory.Count -gt $script:MaxSessionMessages) {
+          $script:SessionHistory = $script:SessionHistory[-$script:MaxSessionMessages..-1]
+        }
+      }
+
+      # Add system message
+      $messages += @{
+        role = "system"
+        content = $finalSystemPrompt
+      }
+      
+      if (-not $script:ActiveSession) {
+        $messages += @{
+          role = "user"
+          content = $UserMessage
+        }
+      }
+
       # Prepare the request body
       $requestBody = @{
         model = $Model
-        messages = @(
-          @{
-            role = "system"
-            content = $finalSystemPrompt
-          }
-          @{
-            role = "user"
-            content = $UserMessage
-          }
-        )
+        messages = $messages
         max_tokens = $script:MaxTokens
         temperature = 0.3
         stream = $false
@@ -164,6 +266,16 @@ function Get-LLMResponse
         {
           Write-Warning "LLM returned empty response"
           return $null
+        }
+
+        # Add response to session history if active
+        if ($script:ActiveSession) {
+          $script:SessionHistory += @{role="assistant"; content=$responseText}
+          
+          # Trim history again if needed (after adding response)
+          if ($script:SessionHistory.Count -gt $script:MaxSessionMessages) {
+            $script:SessionHistory = $script:SessionHistory[-$script:MaxSessionMessages..-1]
+          }
         }
 
         Write-Verbose "Generated response: $responseText"
@@ -420,6 +532,9 @@ function Clear-LLMCommandHistory
 
 # Export functions
 Export-ModuleMember -Function @(
+  'Start-LLMSession',
+  'Stop-LLMSession', 
+  'Get-LLMSessionStatus',
   'Get-LLMResponse',
   'Get-LLMCommand',
   'Invoke-LLMCompleteCurrentLine',
