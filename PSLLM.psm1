@@ -27,6 +27,8 @@ function Get-LLMCommand
     Natural language description of the command you want
     .PARAMETER Context
     Additional context to provide to the LLM for more accurate command generation. Accepts any PowerShell objects.
+    .PARAMETER PipelineContext
+    Context provided via pipeline. Automatically collected from pipeline input.
     .PARAMETER ApiEndpoint
     Override the default API endpoint
     .PARAMETER Model
@@ -40,15 +42,18 @@ function Get-LLMCommand
     .EXAMPLE
     Get-Process | Get-LLMCommand "show top memory consumers"
     .EXAMPLE
-    Get-ChildItem | Get-LLMCommand "analyze file structure" -Context $_
+    Get-ChildItem | Get-LLMCommand "analyze file structure" -Context "additional info"
     #>
   [CmdletBinding()]
   param(
     [Parameter(Mandatory=$true, Position=0)]
     [string]$Description,
 
-    [Parameter(Mandatory=$false, Position=1, ValueFromRemainingArguments=$true)]
+    [Parameter(Mandatory=$false)]
     [object[]]$Context,
+
+    [Parameter(Mandatory=$false, ValueFromPipeline=$true)]
+    [object[]]$PipelineContext,
 
     [Parameter(Mandatory=$false)]
     [string]$ApiEndpoint = $script:ApiEndpoint,
@@ -57,32 +62,52 @@ function Get-LLMCommand
     [string]$Model = $script:DefaultModel
   )
 
-  # Validate API key
-  $apiKey = $env:LLM_API_KEY ?? $env:OPENAI_API_KEY
-  if ([string]::IsNullOrWhiteSpace($apiKey))
-  {
-    Write-Error "LLM_API_KEY or OPENAI_API_KEY environment variable not set"
-    return $null
+  begin {
+    # Validate API key
+    $apiKey = $env:LLM_API_KEY ?? $env:OPENAI_API_KEY
+    if ([string]::IsNullOrWhiteSpace($apiKey))
+    {
+      Write-Error "LLM_API_KEY or OPENAI_API_KEY environment variable not set"
+      return
+    }
+
+    # Collect pipeline context
+    $collectedPipelineContext = @()
   }
 
-  # Convert context objects to strings for LLM consumption
-  $contextString = if ($Context) {
-    if ($Context -is [string]) {
-      $Context
-    } elseif ($Context -is [array]) {
-      $Context | ForEach-Object { 
-        if ($_ -is [string]) { $_ } 
-        else { $_ | Out-String -Stream } 
-      } | Out-String
-    } else {
-      $Context | Out-String -Stream | Out-String
+  process {
+    # Collect pipeline objects
+    if ($PipelineContext) {
+      $collectedPipelineContext += $PipelineContext
     }
-  } else { $null }
+  }
 
-  try
-  {
-    # Construct the system prompt for PowerShell commands
-    $systemPrompt = @"
+  end {
+    # Merge explicit context and pipeline context (explicit takes priority)
+    $mergedContext = @()
+    if ($Context) {
+      $mergedContext += $Context
+    }
+    if ($collectedPipelineContext.Count -gt 0) {
+      $mergedContext += $collectedPipelineContext
+    }
+
+    # Convert context objects to strings for LLM consumption
+    $contextString = if ($mergedContext.Count -gt 0) {
+      if ($mergedContext.Count -eq 1 -and $mergedContext[0] -is [string]) {
+        $mergedContext[0]
+      } else {
+        $mergedContext | ForEach-Object { 
+          if ($_ -is [string]) { $_ } 
+          else { $_ | Out-String -Stream } 
+        } | Out-String
+      }
+    } else { $null }
+
+    try
+    {
+      # Construct the system prompt for PowerShell commands
+      $systemPrompt = @"
 You are a PowerShell and CLI expert assistant. Generate ONLY the command(s) that accomplish the user's request.
 
 $(-not [string]::IsNullOrWhiteSpace($contextString) ? "Context provided: $contextString`n" : "")
@@ -102,82 +127,83 @@ Rules:
 - Safety first: where reasonable, add CONCISE checks and confirmations for destructive operations (e.g. -WhatIf)
 "@
 
-    # Construct the user message
-    $userMessage = if (-not [string]::IsNullOrWhiteSpace($contextString))
-    {
-      "PowerShell command to: $Description (using the provided context)"
-    } else
-    {
-      "PowerShell command to: $Description"
-    }
-
-    # Prepare the request body
-    $requestBody = @{
-      model = $Model
-      messages = @(
-        @{
-          role = "system"
-          content = $systemPrompt
-        }
-        @{
-          role = "user"
-          content = $userMessage
-        }
-      )
-      max_tokens = $script:MaxTokens
-      temperature = 0.3
-      stream = $false
-    } | ConvertTo-Json -Depth 10
-
-    # Prepare HTTP headers
-    $headers = @{
-      "Authorization" = "Bearer $apiKey"
-      "Content-Type" = "application/json"
-    }
-
-    Write-Verbose "Querying LLM API: $ApiEndpoint"
-    Write-Verbose "Request: $requestBody"
-
-    # Make the API request
-    $response = Invoke-RestMethod -Uri $ApiEndpoint -Method Post -Headers $headers -Body $requestBody -TimeoutSec $script:RequestTimeout
-
-    # Extract the command from the response
-    if ($response.choices -and $response.choices.Count -gt 0)
-    {
-      $command = $response.choices[0].message.content.Trim()
-
-      if ([string]::IsNullOrWhiteSpace($command))
+      # Construct the user message
+      $userMessage = if (-not [string]::IsNullOrWhiteSpace($contextString))
       {
-        Write-Warning "LLM returned empty response"
-        return $null
+        "PowerShell command to: $Description (using the provided context)"
+      } else
+      {
+        "PowerShell command to: $Description"
       }
 
-      # Clean up common formatting issues
-      $command = $command -replace '^```powershell\s*', '' -replace '^```ps1\s*', '' -replace '^```\s*', '' -replace '```\s*$', ''
-      $command = $command.Trim()
+      # Prepare the request body
+      $requestBody = @{
+        model = $Model
+        messages = @(
+          @{
+            role = "system"
+            content = $systemPrompt
+          }
+          @{
+            role = "user"
+            content = $userMessage
+          }
+        )
+        max_tokens = $script:MaxTokens
+        temperature = 0.3
+        stream = $false
+      } | ConvertTo-Json -Depth 10
 
-      Write-Verbose "Generated command: $command"
-      return $command
-    } else
+      # Prepare HTTP headers
+      $headers = @{
+        "Authorization" = "Bearer $apiKey"
+        "Content-Type" = "application/json"
+      }
+
+      Write-Verbose "Querying LLM API: $ApiEndpoint"
+      Write-Verbose "Request: $requestBody"
+
+      # Make the API request
+      $response = Invoke-RestMethod -Uri $ApiEndpoint -Method Post -Headers $headers -Body $requestBody -TimeoutSec $script:RequestTimeout
+
+      # Extract the command from the response
+      if ($response.choices -and $response.choices.Count -gt 0)
+      {
+        $command = $response.choices[0].message.content.Trim()
+
+        if ([string]::IsNullOrWhiteSpace($command))
+        {
+          Write-Warning "LLM returned empty response"
+          return $null
+        }
+
+        # Clean up common formatting issues
+        $command = $command -replace '^```powershell\s*', '' -replace '^```ps1\s*', '' -replace '^```\s*', '' -replace '```\s*$', ''
+        $command = $command.Trim()
+
+        Write-Verbose "Generated command: $command"
+        return $command
+      } else
+      {
+        Write-Warning "No choices returned from LLM API"
+        return $null
+      }
+    } catch
     {
-      Write-Warning "No choices returned from LLM API"
+      Write-Host $_.Exception
+
+      # Use generic LLM name since we support multiple providers
+      $providerName = if ($ApiEndpoint -match "openai")
+      { "OpenAI" 
+      } elseif ($ApiEndpoint -match "nanogpt")
+      { "NanoGPT" 
+      } else
+      { "LLM API" 
+      }
+
+      Write-Error "Failed to get command from $providerName"
       return $null
     }
-  } catch
-  {
-    Write-Host $_.Exception
-
-    # Use generic LLM name since we support multiple providers
-    $providerName = if ($ApiEndpoint -match "openai")
-    { "OpenAI" 
-    } elseif ($ApiEndpoint -match "nanogpt")
-    { "NanoGPT" 
-    } else
-    { "LLM API" 
-    }
-
-    Write-Error "Failed to get command from $providerName"
-    return $null
   }
 }
 
