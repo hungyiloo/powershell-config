@@ -14,13 +14,13 @@ $script:MaxHistorySize = 50
 $script:ApiEndpoint = ($env:LLM_API_ENDPOINT ?? "https://api.openai.com/v1") + "/chat/completions"
 
 # Model configuration
-$script:DefaultModel = $env:LLM_MODEL ?? "qwen/qwen3-coder"
+$script:DefaultModel = $env:LLM_MODEL ?? "z-ai/glm-4.6"
 
 # Maximum tokens for response
 $script:MaxTokens = 150
 
 # Request timeout in seconds
-$script:RequestTimeout = 10
+$script:RequestTimeout = 15
 #endregion
 
 function Get-LLMCommand
@@ -204,18 +204,7 @@ Rules:
       }
     } catch
     {
-      Write-Host $_.Exception
-
-      # Use generic LLM name since we support multiple providers
-      $providerName = if ($ApiEndpoint -match "openai")
-      { "OpenAI" 
-      } elseif ($ApiEndpoint -match "nanogpt")
-      { "NanoGPT" 
-      } else
-      { "LLM API" 
-      }
-
-      Write-Error "Failed to get command from $providerName"
+      Write-Error $_ -ErrorAction Continue
       return $null
     }
   }
