@@ -26,7 +26,7 @@ function Get-LLMCommand
     .PARAMETER Description
     Natural language description of the command you want
     .PARAMETER Context
-    Additional context to provide to the LLM for more accurate command generation
+    Additional context to provide to the LLM for more accurate command generation. Accepts any PowerShell objects.
     .PARAMETER ApiEndpoint
     Override the default API endpoint
     .PARAMETER Model
@@ -37,14 +37,18 @@ function Get-LLMCommand
     Get-LLMCommand "rename all .txt files to .bak" -Model "gpt-4"
     .EXAMPLE
     Get-LLMCommand "generate summary" -Context "Recent commits: abc123 fix bug, def456 add feature"
+    .EXAMPLE
+    Get-Process | Get-LLMCommand "show top memory consumers"
+    .EXAMPLE
+    Get-ChildItem | Get-LLMCommand "analyze file structure" -Context $_
     #>
   [CmdletBinding()]
   param(
-    [Parameter(Mandatory=$true)]
+    [Parameter(Mandatory=$true, Position=0)]
     [string]$Description,
 
-    [Parameter(Mandatory=$false)]
-    [string]$Context,
+    [Parameter(Mandatory=$false, Position=1, ValueFromRemainingArguments=$true)]
+    [object[]]$Context,
 
     [Parameter(Mandatory=$false)]
     [string]$ApiEndpoint = $script:ApiEndpoint,
@@ -61,30 +65,45 @@ function Get-LLMCommand
     return $null
   }
 
+  # Convert context objects to strings for LLM consumption
+  $contextString = if ($Context) {
+    if ($Context -is [string]) {
+      $Context
+    } elseif ($Context -is [array]) {
+      $Context | ForEach-Object { 
+        if ($_ -is [string]) { $_ } 
+        else { $_ | Out-String -Stream } 
+      } | Out-String
+    } else {
+      $Context | Out-String -Stream | Out-String
+    }
+  } else { $null }
+
   try
   {
     # Construct the system prompt for PowerShell commands
     $systemPrompt = @"
 You are a PowerShell and CLI expert assistant. Generate ONLY the command(s) that accomplish the user's request.
 
-$(-not [string]::IsNullOrWhiteSpace($Context) ? "Context provided: $Context`n" : "")
+$(-not [string]::IsNullOrWhiteSpace($contextString) ? "Context provided: $contextString`n" : "")
 
 Rules:
 - Return ONLY the command code, no explanations
 - Return ONLY ONE SOLUTION; it may be multiple commands, but *never return more than one way to do the same thing*
+- The solution should match what the user asked; NO MORE
 - Assume a pwsh environment, e.g. don't use bash piping
 - Use pwsh functions and cmdlets by default, unless otherwise specified
 - If asked to use a specific tool, use it; don't forcibly replace it with native pwsh
 - Keep commands concise and idiomatic
 - For complex operations, use pipeline where appropriate
-- Do not include any markdown formatting, backticks, or explanatory text
-- If multiple commands are needed, separate them with newlines
+- **DO NOT** include any markdown formatting, backticks, explanatory text or commentary
+- If multiple commands are needed, put them on separate lines
 - Handle common edge cases (quoted paths, error handling) appropriately
-- Safety first: try to add checks and confirmations for destructive operations
+- Safety first: where reasonable, add CONCISE checks and confirmations for destructive operations (e.g. -WhatIf)
 "@
 
     # Construct the user message
-    $userMessage = if (-not [string]::IsNullOrWhiteSpace($Context))
+    $userMessage = if (-not [string]::IsNullOrWhiteSpace($contextString))
     {
       "PowerShell command to: $Description (using the provided context)"
     } else
