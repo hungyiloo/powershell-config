@@ -130,10 +130,10 @@ Rules:
       # Construct the user message
       $userMessage = if (-not [string]::IsNullOrWhiteSpace($contextString))
       {
-        "PowerShell command to: $Description (using the provided context)"
+        "Generate a command to: $Description (using the provided context)"
       } else
       {
-        "PowerShell command to: $Description"
+        "Generate a command to: $Description"
       }
 
       # Prepare the request body
