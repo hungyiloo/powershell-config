@@ -17,3 +17,8 @@ if (-not $env:LLM_API_KEY)
 Set-PSReadLineKeyHandler -Chord 'Ctrl+Alt+L' -BriefDescription 'LLMCompleteCurrent' -ScriptBlock {
     Invoke-LLMCompleteCurrentLine
 }
+
+# Ctrl+Alt+K: Insert last generated LLM command
+Set-PSReadLineKeyHandler -Chord 'Ctrl+Alt+K' -BriefDescription 'LLMInsertLast' -ScriptBlock {
+    Invoke-InsertLastLLMCommand
+}

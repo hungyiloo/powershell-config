@@ -2,6 +2,13 @@
 # Uses PSReadLine buffer manipulation for seamless command line integration
 # OpenAI API integration (compatible with OpenAI-compatible endpoints)
 
+#region Module State
+# Module-level state for command history
+$script:LastLLMCommand = $null
+$script:LLMCommandHistory = @()
+$script:MaxHistorySize = 50
+#endregion
+
 #region Configuration
 # Default API endpoint - can be overridden via environment variable
 $script:ApiEndpoint = ($env:LLM_API_ENDPOINT ?? "https://api.openai.com/v1") + "/chat/completions"
@@ -181,6 +188,13 @@ Rules:
         $command = $command -replace '^```powershell\s*', '' -replace '^```ps1\s*', '' -replace '^```\s*', '' -replace '```\s*$', ''
         $command = $command.Trim()
 
+        # Store in module state
+        $script:LastLLMCommand = $command
+        $script:LLMCommandHistory = @($command) + $script:LLMCommandHistory
+        if ($script:LLMCommandHistory.Count -gt $script:MaxHistorySize) {
+          $script:LLMCommandHistory = $script:LLMCommandHistory[0..($script:MaxHistorySize-1)]
+        }
+
         Write-Verbose "Generated command: $command"
         return $command
       } else
@@ -261,7 +275,7 @@ function Invoke-LLMCompleteCurrentLine
 
   if ([string]::IsNullOrWhiteSpace($currentLine))
   {
-    Invoke-LLMCompletion
+    Write-Host "🤖 Enter a description first, then use Ctrl+Alt+K to insert the last LLM command" -ForegroundColor Yellow
     return
   }
 
@@ -291,8 +305,52 @@ function Invoke-LLMCompleteCurrentLine
   Invoke-ReplacePSConsoleReadLineText -Start 0 -Length $currentLine.Length -ReplacementText $generatedCommand
 }
 
+# PSReadLine helper functions for state management
+function Invoke-InsertLastLLMCommand
+{
+  <#
+    .SYNOPSIS
+    Insert the last generated LLM command into the current line
+    .DESCRIPTION
+    Inserts the most recent command from Get-LLMCommand into the PSReadLine buffer
+    #>
+  if ($script:LastLLMCommand)
+  {
+    [Microsoft.PowerShell.PSConsoleReadLine]::Insert($script:LastLLMCommand)
+  } else
+  {
+    Write-Host "No LLM command available. Run Get-LLMCommand first." -ForegroundColor Yellow
+  }
+}
+
+function Get-LLMCommandHistory
+{
+  <#
+    .SYNOPSIS
+    Get the history of generated LLM commands
+    .DESCRIPTION
+    Returns the array of previously generated LLM commands
+    #>
+  return $script:LLMCommandHistory
+}
+
+function Clear-LLMCommandHistory
+{
+  <#
+    .SYNOPSIS
+    Clear the LLM command history
+    .DESCRIPTION
+    Clears the module-level command history and last command
+    #>
+  $script:LLMCommandHistory = @()
+  $script:LastLLMCommand = $null
+}
+
 # Export functions
 Export-ModuleMember -Function @(
   'Get-LLMCommand',
-  'Invoke-LLMCompleteCurrentLine'
+  'Invoke-LLMCompleteCurrentLine',
+  'Invoke-InsertLastLLMCommand',
+  'Get-LLMCommandHistory',
+  'Clear-LLMCommandHistory'
 )
