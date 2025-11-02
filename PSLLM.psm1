@@ -11,7 +11,7 @@ $script:MaxHistorySize = 50
 # Session state - dead simple implementation
 $script:ActiveSession = $false
 $script:SessionHistory = @()
-$script:MaxSessionMessages = 10
+$script:MaxSessionMessages = 20
 #endregion
 
 #region Configuration
@@ -194,7 +194,7 @@ function Get-LLMResponse
     {
       # Assign a default system prompt if none was specified
       if ([string]::IsNullOrWhiteSpace($SystemPrompt)) {
-        $SystemPrompt = "You are a helpful assistant working within a pwsh terminal environment; help however you can, but keep your answers concise. Use only plain text and avoid markdown, unless otherwise instructed."
+        $SystemPrompt = "You are a helpful assistant in a pwsh terminal. Be concise. Keep your lines under 80 chars. Use neat plain text layout and **AVOID ALL MARKDOWN FORMATTING** unless otherwise instructed. ASCII/Unicode diagrams and tables are encouraged."
       }
 
       # Construct the system prompt with context
