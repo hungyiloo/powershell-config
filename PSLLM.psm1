@@ -468,7 +468,7 @@ function Invoke-LLMCompleteCurrentLine
   Write-Host "🤖 Completing with LLM..." -ForegroundColor Yellow -NoNewline
 
   # Use current line as context for completion
-  $generatedCommand = Get-LLMCommand -Description "Complete or improve this PowerShell command: $currentLine"
+  $generatedCommand = Get-LLMCommand -Description "Complete this rest of this command (or rewrite/improve it if you can't complete it): $currentLine"
 
   # Clear loading line
   [System.Console]::SetCursorPosition(0, [System.Console]::CursorTop)
