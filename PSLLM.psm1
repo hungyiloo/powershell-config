@@ -23,17 +23,19 @@ $script:MaxTokens = 150
 $script:RequestTimeout = 15
 #endregion
 
-function Get-LLMCommand
+function Get-LLMResponse
 {
   <#
     .SYNOPSIS
-    Get a PowerShell command from LLM API based on natural language description
+    Get a response from LLM API with custom system prompt
     .DESCRIPTION
-    Queries LLM API and returns a PowerShell command
-    .PARAMETER Description
-    Natural language description of the command you want
+    Core API communication function that handles context merging, authentication, and response processing
+    .PARAMETER UserMessage
+    The user's message or query
+    .PARAMETER SystemPrompt
+    The system prompt that defines the LLM's behavior and constraints
     .PARAMETER Context
-    Additional context to provide to the LLM for more accurate command generation. Accepts any PowerShell objects.
+    Additional context to provide to the LLM. Accepts any PowerShell objects.
     .PARAMETER PipelineContext
     Context provided via pipeline. Automatically collected from pipeline input.
     .PARAMETER ApiEndpoint
@@ -41,20 +43,17 @@ function Get-LLMCommand
     .PARAMETER Model
     Override the default model
     .EXAMPLE
-    Get-LLMCommand "list all running processes sorted by memory"
+    Get-LLMResponse -UserMessage "What is PowerShell?" -SystemPrompt "You are a helpful assistant."
     .EXAMPLE
-    Get-LLMCommand "rename all .txt files to .bak" -Model "gpt-4"
-    .EXAMPLE
-    Get-LLMCommand "generate summary" -Context "Recent commits: abc123 fix bug, def456 add feature"
-    .EXAMPLE
-    Get-Process | Get-LLMCommand "show top memory consumers"
-    .EXAMPLE
-    Get-ChildItem | Get-LLMCommand "analyze file structure" -Context "additional info"
+    Get-Process | Get-LLMResponse -UserMessage "Show me the top memory consumers" -SystemPrompt "Analyze this data:"
     #>
   [CmdletBinding()]
   param(
-    [Parameter(Mandatory=$true, Position=0)]
-    [string]$Description,
+    [Parameter(Mandatory=$true)]
+    [string]$UserMessage,
+
+    [Parameter(Mandatory=$false)]
+    [string]$SystemPrompt,
 
     [Parameter(Mandatory=$false)]
     [object[]]$Context,
@@ -113,34 +112,17 @@ function Get-LLMCommand
 
     try
     {
-      # Construct the system prompt for PowerShell commands
-      $systemPrompt = @"
-You are a PowerShell and CLI expert assistant. Generate ONLY the command(s) that accomplish the user's request.
+      # Assign a default system prompt if none was specified
+      if ([string]::IsNullOrWhiteSpace($SystemPrompt)) {
+        $SystemPrompt = "You are a helpful assistant working within a pwsh terminal environment; help however you can, but keep your answers concise. Use only plain text and avoid markdown, unless otherwise instructed."
+      }
 
-$(-not [string]::IsNullOrWhiteSpace($contextString) ? "Context provided: $contextString`n" : "")
-
-Rules:
-- Return ONLY the command code, no explanations
-- Return ONLY ONE SOLUTION; it may be multiple commands, but *never return more than one way to do the same thing*
-- The solution should match what the user asked; NO MORE
-- Assume a pwsh environment, e.g. don't use bash piping
-- Use pwsh functions and cmdlets by default, unless otherwise specified
-- If asked to use a specific tool, use it; don't forcibly replace it with native pwsh
-- Keep commands concise and idiomatic
-- For complex operations, use pipeline where appropriate
-- **DO NOT** include any markdown formatting, backticks, explanatory text or commentary
-- If multiple commands are needed, put them on separate lines
-- Handle common edge cases (quoted paths, error handling) appropriately
-- Safety first: where reasonable, add CONCISE checks and confirmations for destructive operations (e.g. -WhatIf)
-"@
-
-      # Construct the user message
-      $userMessage = if (-not [string]::IsNullOrWhiteSpace($contextString))
+      # Construct the system prompt with context
+      $finalSystemPrompt = if (-not [string]::IsNullOrWhiteSpace($contextString))
       {
-        "Generate a command to: $Description (using the provided context)"
-      } else
-      {
-        "Generate a command to: $Description"
+        "$SystemPrompt`n`nContext provided: $contextString"
+      } else {
+        $SystemPrompt
       }
 
       # Prepare the request body
@@ -149,11 +131,11 @@ Rules:
         messages = @(
           @{
             role = "system"
-            content = $systemPrompt
+            content = $finalSystemPrompt
           }
           @{
             role = "user"
-            content = $userMessage
+            content = $UserMessage
           }
         )
         max_tokens = $script:MaxTokens
@@ -173,30 +155,19 @@ Rules:
       # Make the API request
       $response = Invoke-RestMethod -Uri $ApiEndpoint -Method Post -Headers $headers -Body $requestBody -TimeoutSec $script:RequestTimeout
 
-      # Extract the command from the response
+      # Extract the response
       if ($response.choices -and $response.choices.Count -gt 0)
       {
-        $command = $response.choices[0].message.content.Trim()
+        $responseText = $response.choices[0].message.content.Trim()
 
-        if ([string]::IsNullOrWhiteSpace($command))
+        if ([string]::IsNullOrWhiteSpace($responseText))
         {
           Write-Warning "LLM returned empty response"
           return $null
         }
 
-        # Clean up common formatting issues
-        $command = $command -replace '^```powershell\s*', '' -replace '^```ps1\s*', '' -replace '^```\s*', '' -replace '```\s*$', ''
-        $command = $command.Trim()
-
-        # Store in module state
-        $script:LastLLMCommand = $command
-        $script:LLMCommandHistory = @($command) + $script:LLMCommandHistory
-        if ($script:LLMCommandHistory.Count -gt $script:MaxHistorySize) {
-          $script:LLMCommandHistory = $script:LLMCommandHistory[0..($script:MaxHistorySize-1)]
-        }
-
-        Write-Verbose "Generated command: $command"
-        return $command
+        Write-Verbose "Generated response: $responseText"
+        return $responseText
       } else
       {
         Write-Warning "No choices returned from LLM API"
@@ -207,6 +178,98 @@ Rules:
       Write-Error $_ -ErrorAction Continue
       return $null
     }
+  }
+}
+
+function Get-LLMCommand
+{
+  <#
+    .SYNOPSIS
+    Get a PowerShell command from LLM API based on natural language description
+    .DESCRIPTION
+    Queries LLM API and returns a PowerShell command using a specialized system prompt
+    .PARAMETER Description
+    Natural language description of the command you want
+    .PARAMETER Context
+    Additional context to provide to the LLM for more accurate command generation. Accepts any PowerShell objects.
+    .PARAMETER PipelineContext
+    Context provided via pipeline. Automatically collected from pipeline input.
+    .PARAMETER ApiEndpoint
+    Override the default API endpoint
+    .PARAMETER Model
+    Override the default model
+    .EXAMPLE
+    Get-LLMCommand "list all running processes sorted by memory"
+    .EXAMPLE
+    Get-LLMCommand "rename all .txt files to .bak" -Model "gpt-4"
+    .EXAMPLE
+    Get-LLMCommand "generate summary" -Context "Recent commits: abc123 fix bug, def456 add feature"
+    .EXAMPLE
+    Get-Process | Get-LLMCommand "show top memory consumers"
+    .EXAMPLE
+    Get-ChildItem | Get-LLMCommand "analyze file structure" -Context "additional info"
+    #>
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory=$true, Position=0)]
+    [string]$Description,
+
+    [Parameter(Mandatory=$false)]
+    [object[]]$Context,
+
+    [Parameter(Mandatory=$false, ValueFromPipeline=$true)]
+    [object[]]$PipelineContext,
+
+    [Parameter(Mandatory=$false)]
+    [string]$ApiEndpoint = $script:ApiEndpoint,
+
+    [Parameter(Mandatory=$false)]
+    [string]$Model = $script:DefaultModel
+  )
+
+  end {
+    # Construct the system prompt for PowerShell commands
+    $systemPrompt = @"
+You are a PowerShell and CLI expert assistant. Generate ONLY the command(s) that accomplish the user's request.
+
+Rules:
+- Return ONLY the command code, no explanations
+- Return ONLY ONE SOLUTION; it may be multiple commands, but *never return more than one way to do the same thing*
+- The solution should match what the user asked; NO MORE
+- Assume a pwsh environment, e.g. don't use bash piping
+- Use pwsh functions and cmdlets by default, unless otherwise specified
+- If asked to use a specific tool, use it; don't forcibly replace it with native pwsh
+- Keep commands concise and idiomatic
+- For complex operations, use pipeline where appropriate
+- **DO NOT** include any markdown formatting, backticks, explanatory text or commentary
+- If multiple commands are needed, put them on separate lines
+- Handle common edge cases (quoted paths, error handling) appropriately
+- Safety first: where reasonable, add CONCISE checks and confirmations for destructive operations (e.g. -WhatIf)
+"@
+
+    # Construct the user message
+    $userMessage = "Generate a command to: $Description"
+
+    # Get response from the base function
+    $rawResponse = Get-LLMResponse -UserMessage $userMessage -SystemPrompt $systemPrompt -Context $Context -PipelineContext $PipelineContext -ApiEndpoint $ApiEndpoint -Model $Model
+
+    if ($null -eq $rawResponse) {
+      return $null
+    }
+
+    # Clean up common formatting issues specific to commands
+    $command = $rawResponse -replace '^```powershell\s*', '' -replace '^```ps1\s*', '' -replace '^```\s*', '' -replace '```\s*$', ''
+    $command = $command.Trim()
+
+    # Store in module state
+    $script:LastLLMCommand = $command
+    $script:LLMCommandHistory = @($command) + $script:LLMCommandHistory
+    if ($script:LLMCommandHistory.Count -gt $script:MaxHistorySize) {
+      $script:LLMCommandHistory = $script:LLMCommandHistory[0..($script:MaxHistorySize-1)]
+    }
+
+    Write-Verbose "Generated command: $command"
+    return $command
   }
 }
 
@@ -357,6 +420,7 @@ function Clear-LLMCommandHistory
 
 # Export functions
 Export-ModuleMember -Function @(
+  'Get-LLMResponse',
   'Get-LLMCommand',
   'Invoke-LLMCompleteCurrentLine',
   'Invoke-InsertLastLLMCommand',
