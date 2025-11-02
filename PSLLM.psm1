@@ -73,12 +73,14 @@ Rules:
 - Return ONLY the command code, no explanations
 - Return ONLY ONE SOLUTION; it may be multiple commands, but *never return more than one way to do the same thing*
 - Assume a pwsh environment, e.g. don't use bash piping
-- use pwsh functions and cmdlets by default, unless told otherwise
+- Use pwsh functions and cmdlets by default, unless otherwise specified
+- If asked to use a specific tool, use it; don't forcibly replace it with native pwsh
 - Keep commands concise and idiomatic
 - For complex operations, use pipeline where appropriate
 - Do not include any markdown formatting, backticks, or explanatory text
 - If multiple commands are needed, separate them with newlines
 - Handle common edge cases (quoted paths, error handling) appropriately
+- Safety first: try to add checks and confirmations for destructive operations
 "@
 
     # Construct the user message
