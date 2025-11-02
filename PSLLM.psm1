@@ -310,17 +310,37 @@ function Invoke-InsertLastLLMCommand
 {
   <#
     .SYNOPSIS
-    Insert the last generated LLM command into the current line
+    Insert or cycle through LLM commands based on current buffer state
     .DESCRIPTION
-    Inserts the most recent command from Get-LLMCommand into the PSReadLine buffer
+    Three behaviors:
+    1. Empty buffer: Insert last LLM command
+    2. Buffer matches LLM history: Cycle to previous command
+    3. Buffer doesn't match: No-op (silent)
     #>
-  if ($script:LastLLMCommand)
-  {
-    [Microsoft.PowerShell.PSConsoleReadLine]::Insert($script:LastLLMCommand)
-  } else
-  {
-    Write-Host "No LLM command available. Run Get-LLMCommand first." -ForegroundColor Yellow
+  $bufferState = Get-PSConsoleReadLineBufferState
+  $currentText = $bufferState.Line.Trim()
+  
+  # Case 1: Empty buffer → insert last command
+  if ([string]::IsNullOrWhiteSpace($currentText)) {
+    if ($script:LastLLMCommand) {
+      Invoke-InsertPSConsoleReadLineText($script:LastLLMCommand)
+    } else {
+      Write-Host "No LLM command available. Run Get-LLMCommand first." -ForegroundColor Yellow
+    }
+    return
   }
+  
+  # Case 2: Buffer matches LLM history → cycle to previous
+  $currentIndex = $script:LLMCommandHistory.IndexOf($currentText)
+  if ($currentIndex -ne -1) {
+    $prevIndex = ($currentIndex - 1 + $script:LLMCommandHistory.Count) % $script:LLMCommandHistory.Count
+    $prevCommand = $script:LLMCommandHistory[$prevIndex]
+    Invoke-ReplacePSConsoleReadLineText -Start 0 -Length $bufferState.Line.Length -ReplacementText $prevCommand
+    return
+  }
+  
+  # Case 3: Buffer doesn't match → no-op (silent)
+  # Don't disturb user typing
 }
 
 function Get-LLMCommandHistory
