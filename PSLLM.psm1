@@ -77,6 +77,35 @@ function Stop-LLMSession
   Write-Host "🤖 LLM Session stopped" -ForegroundColor Yellow
 }
 
+function Restart-LLMSession
+{
+  <#
+    .SYNOPSIS
+    Restart the LLM session with optional new context
+    .DESCRIPTION
+    Stops the current session and starts a new one, optionally with new initial context
+    .PARAMETER InitialContext
+    Optional new initial context for the restarted session
+    .EXAMPLE
+    Restart-LLMSession
+    .EXAMPLE
+    Restart-LLMSession -InitialContext "Switching to debugging mode"
+    #>
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory=$false)]
+    [string]$InitialContext
+  )
+
+  # Stop current session if active
+  if ($script:ActiveSession) {
+    Stop-LLMSession
+  }
+  
+  # Start new session with optional context
+  Start-LLMSession -InitialContext $InitialContext
+}
+
 function Get-LLMSessionStatus
 {
   <#
@@ -549,7 +578,8 @@ function Clear-LLMCommandHistory
 # Export functions
 Export-ModuleMember -Function @(
   'Start-LLMSession',
-  'Stop-LLMSession', 
+  'Stop-LLMSession',
+  'Restart-LLMSession',
   'Get-LLMSessionStatus',
   'Get-LLMResponse',
   'Get-LLMCommand',

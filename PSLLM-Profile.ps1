@@ -22,3 +22,7 @@ Set-PSReadLineKeyHandler -Chord 'Ctrl+Alt+L' -BriefDescription 'LLMCompleteCurre
 Set-PSReadLineKeyHandler -Chord 'Ctrl+Alt+K' -BriefDescription 'LLMInsertLast' -ScriptBlock {
     Invoke-InsertLastLLMCommand
 }
+
+# Convenient aliases
+Set-Alias -Name ask -Value Get-LLMResponse
+Set-Alias -Name gen -Value Get-LLMCommand
