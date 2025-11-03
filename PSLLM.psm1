@@ -26,6 +26,9 @@ $script:MaxTokens = 500
 
 # Request timeout in seconds
 $script:RequestTimeout = 30
+
+# Color configuration - disabled via environment variable
+$script:EnableColors = $env:PSLLM_NO_COLORS -ne '1'
 #endregion
 
 function Start-LLMSession
@@ -174,7 +177,10 @@ function Get-LLMResponse
     [string]$ApiEndpoint = $script:ApiEndpoint,
 
     [Parameter(Mandatory=$false)]
-    [string]$Model = $script:DefaultModel
+    [string]$Model = $script:DefaultModel,
+
+    [Parameter(Mandatory=$false)]
+    [switch]$NoColors
   )
 
   begin {
@@ -223,7 +229,14 @@ function Get-LLMResponse
     {
       # Assign a default system prompt if none was specified
       if ([string]::IsNullOrWhiteSpace($SystemPrompt)) {
-        $SystemPrompt = @"
+        if ($NoColors) {
+          $SystemPrompt = @"
+You are a helpful assistant in a pwsh terminal. Be concise. Keep your lines under 80 chars.
+Use neat plain text layout and **AVOID ALL MARKDOWN FORMATTING** unless otherwise instructed. ASCII/Unicode diagrams and tables are encouraged.
+Return clean text without ANSI color codes.
+"@
+        } else {
+          $SystemPrompt = @"
 You are a helpful assistant in a pwsh terminal. Be concise. Keep your lines under 80 chars.
 Use neat plain text layout and **AVOID ALL MARKDOWN FORMATTING** unless otherwise instructed. ASCII/Unicode diagrams and tables are encouraged.
 Use ANSI escape codes for colors:
@@ -233,6 +246,7 @@ Use ANSI escape codes for colors:
 - Reset: `e[0m
 Use ANY OF THE 16 STANDARD COLORS as you see fit. Use them for emphasis and structure.
 "@
+        }
       }
 
       # Construct the system prompt with context
@@ -317,10 +331,19 @@ Use ANY OF THE 16 STANDARD COLORS as you see fit. Use them for emphasis and stru
         }
 
         Write-Verbose "Generated response: $responseText"
-        Write-Host -NoNewline @"
+        
+        # Handle color initialization and response cleaning
+        if ($NoColors -or (-not $script:EnableColors)) {
+          # Strip ANSI color codes from response
+          $cleanResponse = $responseText -replace '\x1b\[[0-9;]*m', ''
+          return $cleanResponse
+        } else {
+          # Initialize colors with hack, return original response
+          Write-Host -NoNewline @"
 `e[31m`e[0m
-"@ # This hack seems to enable colors without messing up the return value, I think!
-        return $responseText
+"@
+          return $responseText
+        }
       } else
       {
         Write-Warning "No choices returned from LLM API"
@@ -419,8 +442,8 @@ Rules:
         "Generate a command to: $Description"
       }
 
-    # Get response from the base function
-    $rawResponse = Get-LLMResponse -UserMessage $userMessage -SystemPrompt $systemPrompt -Context $Context -PipelineContext $collectedPipelineContext -ApiEndpoint $ApiEndpoint -Model $Model
+    # Get response from the base function (always disable colors for commands)
+    $rawResponse = Get-LLMResponse -UserMessage $userMessage -SystemPrompt $systemPrompt -Context $Context -PipelineContext $collectedPipelineContext -ApiEndpoint $ApiEndpoint -Model $Model -NoColors
 
     if ($null -eq $rawResponse) {
       return $null
