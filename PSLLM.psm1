@@ -22,10 +22,10 @@ $script:ApiEndpoint = ($env:LLM_API_ENDPOINT ?? "https://api.openai.com/v1") + "
 $script:DefaultModel = $env:LLM_MODEL ?? "z-ai/glm-4.6"
 
 # Maximum tokens for response
-$script:MaxTokens = 150
+$script:MaxTokens = 500
 
 # Request timeout in seconds
-$script:RequestTimeout = 15
+$script:RequestTimeout = 30
 #endregion
 
 function Start-LLMSession
