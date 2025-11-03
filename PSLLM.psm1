@@ -223,7 +223,16 @@ function Get-LLMResponse
     {
       # Assign a default system prompt if none was specified
       if ([string]::IsNullOrWhiteSpace($SystemPrompt)) {
-        $SystemPrompt = "You are a helpful assistant in a pwsh terminal. Be concise. Keep your lines under 80 chars. Use neat plain text layout and **AVOID ALL MARKDOWN FORMATTING** unless otherwise instructed. ASCII/Unicode diagrams and tables are encouraged."
+        $SystemPrompt = @"
+You are a helpful assistant in a pwsh terminal. Be concise. Keep your lines under 80 chars.
+Use neat plain text layout and **AVOID ALL MARKDOWN FORMATTING** unless otherwise instructed. ASCII/Unicode diagrams and tables are encouraged.
+Use ANSI escape codes for colors:
+- Red: `e[31m
+- Green: `e[32m
+- Yellow: `e[33m
+- Reset: `e[0m
+Use ANY OF THE 16 STANDARD COLORS as you see fit. Use them for emphasis and structure.
+"@
       }
 
       # Construct the system prompt with context
@@ -308,6 +317,9 @@ function Get-LLMResponse
         }
 
         Write-Verbose "Generated response: $responseText"
+        Write-Host -NoNewline @"
+`e[31m`e[0m
+"@ # This hack seems to enable colors without messing up the return value, I think!
         return $responseText
       } else
       {
