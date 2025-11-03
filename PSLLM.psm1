@@ -16,10 +16,10 @@ $script:MaxSessionMessages = 20
 
 #region Configuration
 # Default API endpoint - can be overridden via environment variable
-$script:ApiEndpoint = ($env:LLM_API_ENDPOINT ?? "https://api.openai.com/v1") + "/chat/completions"
+$script:ApiEndpoint = ($env:PSLLM_API_ENDPOINT ?? "https://api.openai.com/v1") + "/chat/completions"
 
 # Model configuration
-$script:DefaultModel = $env:LLM_MODEL ?? "z-ai/glm-4.6"
+$script:DefaultModel = $env:PSLLM_MODEL ?? "z-ai/glm-4.6"
 
 # Maximum tokens for response
 $script:MaxTokens = 500
@@ -185,10 +185,10 @@ function Get-LLMResponse
 
   begin {
     # Validate API key
-    $apiKey = $env:LLM_API_KEY ?? $env:OPENAI_API_KEY
+    $apiKey = $env:PSLLM_API_KEY
     if ([string]::IsNullOrWhiteSpace($apiKey))
     {
-      Write-Error "LLM_API_KEY or OPENAI_API_KEY environment variable not set"
+      Write-Error "PSLLM_API_KEY environment variable not set"
       return
     }
 
