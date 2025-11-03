@@ -19,7 +19,7 @@ $script:MaxSessionMessages = 20
 $script:ApiEndpoint = ($env:PSLLM_API_ENDPOINT ?? "https://api.openai.com/v1") + "/chat/completions"
 
 # Model configuration
-$script:DefaultModel = $env:PSLLM_MODEL ?? "z-ai/glm-4.6"
+$script:DefaultModel = $env:PSLLM_MODEL ?? "gpt-4o-mini"
 
 # Maximum tokens for response
 $script:MaxTokens = 500
