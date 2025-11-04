@@ -3,32 +3,35 @@
 # OpenAI API integration (compatible with OpenAI-compatible endpoints)
 
 #region Module State
-# Module-level state for command history
+# Module-level state for command history and "chat history" context
 $script:LastLLMCommand = $null
 $script:LLMCommandHistory = @()
-$script:MaxHistorySize = 50
-
-# Session state - dead simple implementation
 $script:ActiveSession = $false
 $script:SessionHistory = @()
-$script:MaxSessionMessages = 20
 #endregion
 
 #region Configuration
-# Default API endpoint - can be overridden via environment variable
-$script:ApiEndpoint = ($env:PSLLM_API_ENDPOINT ?? "https://api.openai.com/v1") + "/chat/completions"
-
-# Model configuration
-$script:DefaultModel = $env:PSLLM_MODEL ?? "gpt-4o-mini"
-
-# Maximum tokens for response
-$script:MaxTokens = 500
-
-# Request timeout in seconds
-$script:RequestTimeout = 40
-
-# Color configuration - disabled via environment variable
-$script:EnableColors = $env:PSLLM_NO_COLORS -ne '1'
+# Dynamic configuration resolver - reads env vars on each access
+function Get-PSLLMConfiguration {
+  <#
+    .SYNOPSIS
+    Get current PSLLM configuration from environment variables
+    .DESCRIPTION
+    Centralized configuration that reads environment variables dynamically
+    #>
+  [CmdletBinding()]
+  param()
+  
+  return @{
+    ApiEndpoint = ($env:PSLLM_API_ENDPOINT ?? "https://api.openai.com/v1") + "/chat/completions"
+    Model = $env:PSLLM_MODEL ?? "gpt-4o-mini"
+    MaxTokens = [int]($env:PSLLM_MAX_TOKENS ?? 500)
+    RequestTimeout = [int]($env:PSLLM_REQUEST_TIMEOUT ?? 40)
+    NoColors = [bool]($env:PSLLM_NO_COLORS ?? $false)
+    MaxCommandHistorySize = [int]($env:PSLLM_MAX_COMMAND_HISTORY_SIZE ?? 50)
+    MaxSessionContextMessages = [int]($env:PSLLM_MAX_SESSION_CONTEXT_MESSAGES ?? 20)
+  }
+}
 #endregion
 
 function Start-LLMSession
@@ -124,13 +127,13 @@ function Get-LLMSessionStatus
     return @{
       Active = $true
       MessageCount = $script:SessionHistory.Count
-      MaxMessages = $script:MaxSessionMessages
+      MaxMessages = $script:MaxSessionContextMessages
     }
   } else {
     return @{
       Active = $false
       MessageCount = 0
-      MaxMessages = $script:MaxSessionMessages
+      MaxMessages = $script:MaxSessionContextMessages
     }
   }
 }
@@ -174,10 +177,10 @@ function Get-LLMResponse
     [object[]]$PipelineContext,
 
     [Parameter(Mandatory=$false)]
-    [string]$ApiEndpoint = $script:ApiEndpoint,
+    [string]$ApiEndpoint,
 
     [Parameter(Mandatory=$false)]
-    [string]$Model = $script:DefaultModel,
+    [string]$Model,
 
     [Parameter(Mandatory=$false)]
     [switch]$NoColors
@@ -204,6 +207,13 @@ function Get-LLMResponse
   }
 
   end {
+    # Get current configuration dynamically
+    $config = Get-PSLLMConfiguration
+    
+    # Set defaults from dynamic config if not overridden
+    if (-not $ApiEndpoint) { $ApiEndpoint = $config.ApiEndpoint }
+    if (-not $Model) { $Model = $config.Model }
+    
     # Merge explicit context and pipeline context (explicit takes priority)
     $mergedContext = @()
     if ($Context) {
@@ -229,7 +239,7 @@ function Get-LLMResponse
     {
       # Assign a default system prompt if none was specified
       if ([string]::IsNullOrWhiteSpace($SystemPrompt)) {
-        if ($NoColors) {
+        if ($NoColors -or $config.NoColors) {
           $SystemPrompt = @"
 You are a helpful assistant in a pwsh terminal. Be concise. Keep your lines under 80 chars.
 Use neat plain text layout and **AVOID ALL MARKDOWN FORMATTING** unless otherwise instructed. ASCII/Unicode diagrams and tables are encouraged.
@@ -240,7 +250,7 @@ Return clean text without ANSI color codes.
 You are a helpful assistant in a pwsh terminal. Be concise. Keep your lines under 80 chars.
 Use neat text layout and **AVOID ALL MARKDOWN FORMATTING** unless otherwise instructed. ASCII/Unicode diagrams and tables are encouraged.
 You are encouraged to judiciously use ANSI escape codes for colors and formatting (bold, underline, background colors). e.g. \\x1b[31m
-USE TERMINAL COLORS AND FORMATTING in lieu of markdown to emphasize headings, important phrases and to add visual separation to your reply.
+You are STRONGLY ENCOURAGED USE TERMINAL COLORS AND FORMATTING in lieu of markdown to emphasize headings, important phrases and to add visual separation to your reply.
 "@
         }
       }
@@ -266,8 +276,8 @@ USE TERMINAL COLORS AND FORMATTING in lieu of markdown to emphasize headings, im
         $script:SessionHistory += $currentMessage
         
         # Trim history if needed (hard cutoff)
-        if ($script:SessionHistory.Count -gt $script:MaxSessionMessages) {
-          $script:SessionHistory = $script:SessionHistory[-$script:MaxSessionMessages..-1]
+        if ($script:SessionHistory.Count -gt $config.MaxSessionContextMessages) {
+          $script:SessionHistory = $script:SessionHistory[-$config.MaxSessionContextMessages..-1]
         }
       }
 
@@ -286,11 +296,11 @@ USE TERMINAL COLORS AND FORMATTING in lieu of markdown to emphasize headings, im
 
       # Prepare the request body
       $requestBody = @{
-        model = $Model
-        messages = $messages
-        max_tokens = $script:MaxTokens
-        temperature = 0.3
-        stream = $false
+      model = $Model
+      messages = $messages
+      max_tokens = $config.MaxTokens
+      temperature = 0.3
+      stream = $false
       } | ConvertTo-Json -Depth 10
 
       # Prepare HTTP headers
@@ -303,7 +313,7 @@ USE TERMINAL COLORS AND FORMATTING in lieu of markdown to emphasize headings, im
       Write-Verbose "Request: $requestBody"
 
       # Make the API request
-      $response = Invoke-RestMethod -Uri $ApiEndpoint -Method Post -Headers $headers -Body $requestBody -TimeoutSec $script:RequestTimeout
+      $response = Invoke-RestMethod -Uri $ApiEndpoint -Method Post -Headers $headers -Body $requestBody -TimeoutSec $config.RequestTimeout
 
       # Extract the response
       if ($response.choices -and $response.choices.Count -gt 0)
@@ -321,15 +331,15 @@ USE TERMINAL COLORS AND FORMATTING in lieu of markdown to emphasize headings, im
           $script:SessionHistory += @{role="assistant"; content=$responseText}
           
           # Trim history again if needed (after adding response)
-          if ($script:SessionHistory.Count -gt $script:MaxSessionMessages) {
-            $script:SessionHistory = $script:SessionHistory[-$script:MaxSessionMessages..-1]
+          if ($script:SessionHistory.Count -gt $config.MaxSessionContextMessages) {
+            $script:SessionHistory = $script:SessionHistory[-$config.MaxSessionContextMessages..-1]
           }
         }
 
         Write-Verbose "Generated response: $responseText"
         
         # Handle color initialization and response cleaning
-        if ($NoColors -or (-not $script:EnableColors)) {
+        if ($NoColors -or $config.NoColors) {
           # Strip ANSI color codes from response
           $cleanResponse = $responseText -replace '\x1b\[[0-9;]*m', ''
           return $cleanResponse
@@ -389,10 +399,10 @@ function Get-LLMCommand
     [object[]]$PipelineContext,
 
     [Parameter(Mandatory=$false)]
-    [string]$ApiEndpoint = $script:ApiEndpoint,
+    [string]$ApiEndpoint,
 
     [Parameter(Mandatory=$false)]
-    [string]$Model = $script:DefaultModel
+    [string]$Model
   )
 
   begin {
@@ -408,6 +418,13 @@ function Get-LLMCommand
   }
 
   end {
+    # Get current configuration dynamically
+    $config = Get-PSLLMConfiguration
+    
+    # Set defaults from dynamic config if not overridden
+    if (-not $ApiEndpoint) { $ApiEndpoint = $config.ApiEndpoint }
+    if (-not $Model) { $Model = $config.Model }
+    
     # Construct the system prompt for PowerShell commands
     $systemPrompt = @"
 You are a PowerShell and CLI expert assistant. Generate ONLY the command(s) that accomplish the user's request.
@@ -448,8 +465,8 @@ Rules:
     # Store in module state
     $script:LastLLMCommand = $command
     $script:LLMCommandHistory = @($command) + $script:LLMCommandHistory
-    if ($script:LLMCommandHistory.Count -gt $script:MaxHistorySize) {
-      $script:LLMCommandHistory = $script:LLMCommandHistory[0..($script:MaxHistorySize-1)]
+    if ($script:LLMCommandHistory.Count -gt $config.MaxCommandHistorySize) {
+      $script:LLMCommandHistory = $script:LLMCommandHistory[0..($config.MaxCommandHistorySize-1)]
     }
 
     Write-Verbose "Generated command: $command"
@@ -613,5 +630,6 @@ Export-ModuleMember -Function @(
   'Invoke-LLMCompleteCurrentLine',
   'Invoke-InsertLastLLMCommand',
   'Get-LLMCommandHistory',
-  'Clear-LLMCommandHistory'
+  'Clear-LLMCommandHistory',
+  'Get-PSLLMConfiguration'
 )
