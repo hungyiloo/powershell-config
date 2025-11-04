@@ -41,29 +41,13 @@ function Start-LLMSession
     Start a conversational session with context persistence
     .DESCRIPTION
     Enables conversation history across multiple LLM calls
-    .PARAMETER InitialContext
-    Optional initial context to set the stage for the conversation
     .EXAMPLE
     Start-LLMSession
-    .EXAMPLE
-    Start-LLMSession -InitialContext "I'm debugging a web API issue"
     #>
   [CmdletBinding()]
-  param(
-    [Parameter(Mandatory=$false)]
-    [string]$InitialContext
-  )
+  param()
 
   $script:ActiveSession = $true
-  $script:SessionHistory = @()
-
-  if (-not [string]::IsNullOrWhiteSpace($InitialContext)) {
-    $script:SessionHistory += @{
-      role = "system"
-      content = "Context for this session: $InitialContext"
-    }
-  }
-
   Write-Host "🤖 LLM Session started" -ForegroundColor Green
 }
 
@@ -71,45 +55,46 @@ function Stop-LLMSession
 {
   <#
     .SYNOPSIS
-    Stop the current LLM session and clear history
+    Stop the current LLM session
     .DESCRIPTION
-    Ends the conversational session and clears all stored context
+    Ends the conversational session but preserves history for UX
     #>
   [CmdletBinding()]
   param()
 
   $script:ActiveSession = $false
-  $script:SessionHistory = @()
+  # Don't clear history - preserve for UX requirement
   Write-Host "🤖 LLM Session stopped" -ForegroundColor Yellow
 }
 
-function Restart-LLMSession
+function Reset-LLMSessionHistory
 {
   <#
     .SYNOPSIS
-    Restart the LLM session with optional new context
+    Clear all session history and optionally start fresh
     .DESCRIPTION
-    Stops the current session and starts a new one, optionally with new initial context
-    .PARAMETER InitialContext
-    Optional new initial context for the restarted session
+    Clears the accumulated session history. Optionally starts a new session.
+    .PARAMETER StartSession
+    Automatically start a new session after clearing history
     .EXAMPLE
-    Restart-LLMSession
+    Reset-LLMSessionHistory
     .EXAMPLE
-    Restart-LLMSession -InitialContext "Switching to debugging mode"
+    Reset-LLMSessionHistory -StartSession
     #>
   [CmdletBinding()]
   param(
     [Parameter(Mandatory=$false)]
-    [string]$InitialContext
+    [switch]$StartSession
   )
 
-  # Stop current session if active
-  if ($script:ActiveSession) {
-    Stop-LLMSession
-  }
+  # Clear history
+  $script:SessionHistory = @()
+  Write-Host "🗑️  Session history cleared" -ForegroundColor Yellow
   
-  # Start new session with optional context
-  Start-LLMSession -InitialContext $InitialContext
+  # Optionally start new session
+  if ($StartSession) {
+    Start-LLMSession
+  }
 }
 
 function Get-LLMSessionStatus
@@ -122,18 +107,20 @@ function Get-LLMSessionStatus
     #>
   [CmdletBinding()]
   param()
+  
+  $config = Get-PSLLMConfiguration
 
   if ($script:ActiveSession) {
     return @{
       Active = $true
       MessageCount = $script:SessionHistory.Count
-      MaxMessages = $script:MaxSessionContextMessages
+      MaxMessages = $config.MaxSessionContextMessages
     }
   } else {
     return @{
       Active = $false
-      MessageCount = 0
-      MaxMessages = $script:MaxSessionContextMessages
+      MessageCount = $script:SessionHistory.Count  # Show preserved history
+      MaxMessages = $config.MaxSessionContextMessages
     }
   }
 }
@@ -269,16 +256,6 @@ You are STRONGLY ENCOURAGED USE TERMINAL COLORS AND FORMATTING in lieu of markdo
       if ($script:ActiveSession) {
         # Add session history first
         $messages += $script:SessionHistory
-        
-        # Create and add current user message to both messages and session history
-        $currentMessage = @{role="user"; content=$UserMessage}
-        $messages += $currentMessage
-        $script:SessionHistory += $currentMessage
-        
-        # Trim history if needed (hard cutoff)
-        if ($script:SessionHistory.Count -gt $config.MaxSessionContextMessages) {
-          $script:SessionHistory = $script:SessionHistory[-$config.MaxSessionContextMessages..-1]
-        }
       }
 
       # Add system message
@@ -286,12 +263,19 @@ You are STRONGLY ENCOURAGED USE TERMINAL COLORS AND FORMATTING in lieu of markdo
         role = "system"
         content = $finalSystemPrompt
       }
-      
-      if (-not $script:ActiveSession) {
-        $messages += @{
-          role = "user"
-          content = $UserMessage
-        }
+
+      # Create and add current user message
+      $currentMessage = @{
+        role = "user"
+        content = $UserMessage
+      }
+      $messages += $currentMessage
+
+      # Always add to session history (your UX requirement)
+      $script:SessionHistory += $currentMessage
+      # Trim history if needed (hard cutoff)
+      if ($script:SessionHistory.Count -gt $config.MaxSessionContextMessages) {
+        $script:SessionHistory = $script:SessionHistory[-$config.MaxSessionContextMessages..-1]
       }
 
       # Prepare the request body
@@ -326,14 +310,12 @@ You are STRONGLY ENCOURAGED USE TERMINAL COLORS AND FORMATTING in lieu of markdo
           return $null
         }
 
-        # Add response to session history if active
-        if ($script:ActiveSession) {
-          $script:SessionHistory += @{role="assistant"; content=$responseText}
-          
-          # Trim history again if needed (after adding response)
-          if ($script:SessionHistory.Count -gt $config.MaxSessionContextMessages) {
-            $script:SessionHistory = $script:SessionHistory[-$config.MaxSessionContextMessages..-1]
-          }
+        # Always add response to session history (consistent with user messages)
+        $script:SessionHistory += @{role="assistant"; content=$responseText}
+        
+        # Trim history again if needed (after adding response)
+        if ($script:SessionHistory.Count -gt $config.MaxSessionContextMessages) {
+          $script:SessionHistory = $script:SessionHistory[-$config.MaxSessionContextMessages..-1]
         }
 
         Write-Verbose "Generated response: $responseText"
@@ -623,7 +605,7 @@ function Clear-LLMCommandHistory
 Export-ModuleMember -Function @(
   'Start-LLMSession',
   'Stop-LLMSession',
-  'Restart-LLMSession',
+  'Reset-LLMSessionHistory',
   'Get-LLMSessionStatus',
   'Get-LLMResponse',
   'Get-LLMCommand',
