@@ -25,7 +25,7 @@ $script:DefaultModel = $env:PSLLM_MODEL ?? "gpt-4o-mini"
 $script:MaxTokens = 500
 
 # Request timeout in seconds
-$script:RequestTimeout = 30
+$script:RequestTimeout = 40
 
 # Color configuration - disabled via environment variable
 $script:EnableColors = $env:PSLLM_NO_COLORS -ne '1'
@@ -238,13 +238,9 @@ Return clean text without ANSI color codes.
         } else {
           $SystemPrompt = @"
 You are a helpful assistant in a pwsh terminal. Be concise. Keep your lines under 80 chars.
-Use neat plain text layout and **AVOID ALL MARKDOWN FORMATTING** unless otherwise instructed. ASCII/Unicode diagrams and tables are encouraged.
-Use ANSI escape codes for colors:
-- Red: `e[31m
-- Green: `e[32m
-- Yellow: `e[33m
-- Reset: `e[0m
-Use ANY OF THE 16 STANDARD COLORS as you see fit. Use them for emphasis and structure.
+Use neat text layout and **AVOID ALL MARKDOWN FORMATTING** unless otherwise instructed. ASCII/Unicode diagrams and tables are encouraged.
+You are encouraged to judiciously use ANSI escape codes for colors and formatting (bold, underline, background colors). e.g. \\x1b[31m
+USE TERMINAL COLORS AND FORMATTING in lieu of markdown to emphasize headings, important phrases and to add visual separation to your reply.
 "@
         }
       }
@@ -338,11 +334,7 @@ Use ANY OF THE 16 STANDARD COLORS as you see fit. Use them for emphasis and stru
           $cleanResponse = $responseText -replace '\x1b\[[0-9;]*m', ''
           return $cleanResponse
         } else {
-          # Initialize colors with hack, return original response
-          Write-Host -NoNewline @"
-`e[31m`e[0m
-"@
-          return $responseText
+          return $responseText -replace "\\x1b","`e"
         }
       } else
       {
