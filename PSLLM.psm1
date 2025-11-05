@@ -237,7 +237,7 @@ Return clean text without ANSI color codes.
 You are a helpful assistant in a pwsh terminal. Be concise. Keep your lines under 80 chars.
 Use neat text layout and **AVOID ALL MARKDOWN FORMATTING** unless otherwise instructed. ASCII/Unicode diagrams and tables are encouraged.
 You are encouraged to judiciously use ANSI escape codes for colors and formatting (bold, underline, background colors). e.g. \\x1b[31m
-You are STRONGLY ENCOURAGED USE TERMINAL COLORS AND FORMATTING in lieu of markdown to emphasize headings, important phrases and to add visual separation to your reply.
+You are STRONGLY ENCOURAGED TO USE TERMINAL COLORS AND FORMATTING in lieu of markdown to emphasize headings, important phrases and to add visual separation to your reply.
 "@
         }
       }
@@ -283,7 +283,6 @@ You are STRONGLY ENCOURAGED USE TERMINAL COLORS AND FORMATTING in lieu of markdo
       model = $Model
       messages = $messages
       max_tokens = $config.MaxTokens
-      temperature = 0.3
       stream = $false
       } | ConvertTo-Json -Depth 10
 
@@ -428,9 +427,9 @@ Rules:
 
     # Construct the user message
       $userMessage = if (-not [string]::IsNullOrWhiteSpace($collectedPipelineContext) || -not [string]::IsNullOrWhiteSpace($Context)) {
-        "Generate a command to: $Description (YOU MUST CONSIDER THE IMPORTANT_CONTEXT_PROVIDED)"
+        "Complete this rest of this command (or rewrite/improve it if you can't complete it): $Description (YOU MUST CONSIDER THE IMPORTANT_CONTEXT_PROVIDED)"
       } else {
-        "Generate a command to: $Description"
+        "Complete this rest of this command (or rewrite/improve it if you can't complete it): $Description"
       }
 
     # Get response from the base function (always disable colors for commands)
@@ -523,7 +522,7 @@ function Invoke-LLMCompleteCurrentLine
   Write-Host "🤖 Completing with LLM..." -ForegroundColor Yellow -NoNewline
 
   # Use current line as context for completion
-  $generatedCommand = Get-LLMCommand -Description "Complete this rest of this command (or rewrite/improve it if you can't complete it): $currentLine"
+  $generatedCommand = Get-LLMCommand -Description "$currentLine"
 
   # Clear loading line
   [System.Console]::SetCursorPosition(0, [System.Console]::CursorTop)
