@@ -242,21 +242,11 @@ You are STRONGLY ENCOURAGED TO USE TERMINAL COLORS AND FORMATTING in lieu of mar
         }
       }
 
-      # Construct the system prompt with context
-      $finalSystemPrompt = if (-not [string]::IsNullOrWhiteSpace($contextString))
-      {
-        "$SystemPrompt`n`n<IMPORTANT_CONTEXT_PROVIDED>`n$contextString`n</IMPORTANT_CONTEXT_PROVIDED>"
-      } else {
-        $SystemPrompt
-      }
+      # Keep system prompt clean - context goes in user message
+      $finalSystemPrompt = $SystemPrompt
 
       # Build messages array with session history if active
       $messages = @()
-
-      if ($script:ActiveSession) {
-        # Add session history first
-        $messages += $script:SessionHistory
-      }
 
       # Add system message
       $messages += @{
@@ -264,10 +254,22 @@ You are STRONGLY ENCOURAGED TO USE TERMINAL COLORS AND FORMATTING in lieu of mar
         content = $finalSystemPrompt
       }
 
-      # Create and add current user message
+      if ($script:ActiveSession) {
+        # Add session history first
+        $messages += $script:SessionHistory
+      }
+
+      # Create and add current user message with context
+      $finalUserMessage = if (-not [string]::IsNullOrWhiteSpace($contextString))
+      {
+        "$UserMessage`n`n<IMPORTANT_CONTEXT_PROVIDED>`n$contextString`n</IMPORTANT_CONTEXT_PROVIDED>"
+      } else {
+        $UserMessage
+      }
+      
       $currentMessage = @{
         role = "user"
-        content = $UserMessage
+        content = $finalUserMessage
       }
       $messages += $currentMessage
 
