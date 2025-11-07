@@ -21,7 +21,7 @@ function Get-PSLLMConfiguration {
     #>
   [CmdletBinding()]
   param()
-  
+
   return @{
     ApiEndpoint = ($env:PSLLM_API_ENDPOINT ?? "https://api.openai.com/v1") + "/chat/completions"
     Model = $env:PSLLM_MODEL ?? "gpt-4o-mini"
@@ -90,7 +90,7 @@ function Reset-LLMSessionHistory
   # Clear history
   $script:SessionHistory = @()
   Write-Host "🗑️  Session history cleared" -ForegroundColor Yellow
-  
+
   # Optionally start new session
   if ($StartSession) {
     Start-LLMSession
@@ -107,7 +107,7 @@ function Get-LLMSessionStatus
     #>
   [CmdletBinding()]
   param()
-  
+
   $config = Get-PSLLMConfiguration
 
   if ($script:ActiveSession) {
@@ -122,6 +122,109 @@ function Get-LLMSessionStatus
       MessageCount = $script:SessionHistory.Count  # Show preserved history
       MaxMessages = $config.MaxSessionContextMessages
     }
+  }
+}
+
+function Invoke-PSLLMTool
+{
+  <#
+    .SYNOPSIS
+    Execute PowerShell commands and return results to LLM
+    .DESCRIPTION
+    Executes arbitrary PowerShell commands with user confirmation and safety checks
+    #>
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory=$true)]
+    [object]$ToolCall
+  )
+
+  # Check for dangerous commands and warn user
+  $dangerousPatterns = @(
+    'rm\s+-rf',
+    'remove-item.*-recurse',
+    'format\s+',
+    'del\s+/s',
+    'rd\s+/s',
+    'Stop-Process.*-Name',
+    'Stop-Computer',
+    'Restart-Computer',
+    'Reset-ComputerMachinePassword'
+  )
+
+  $arguments = $ToolCall.function.arguments | ConvertFrom-Json
+  $command = $arguments.command
+  $isDangerous = $false
+  foreach ($pattern in $dangerousPatterns) {
+    if ($command -match $pattern) {
+      $isDangerous = $true
+      break
+    }
+  }
+
+  if ($isDangerous) {
+    Write-Host "⚠️ WARNING: This command appears potentially destructive!" -ForegroundColor Red
+    Write-Host "🔸 [EXECUTE] $command" -ForegroundColor Yellow
+    $confirm = Read-Host "🔸 Are you sure you want to run this? (y/n)"
+    if ($confirm -ne 'y' -and $confirm -ne 'Y') {
+      $cancelledResult = "Command cancelled by user"
+      $script:SessionHistory += @{
+        role = "tool"
+        tool_call_id = $ToolCall.id
+        name = "execute"
+        content = "Command: $command`nResult: Cancelled by user"
+      }
+      return $cancelledResult
+    }
+  } else {
+    Write-Host "🔸 [EXECUTE] $command" -ForegroundColor Cyan
+    $confirm = Read-Host "🔸 Run this command? (y/n)"
+    if ($confirm -ne 'y' -and $confirm -ne 'Y') {
+      $cancelledResult = "Command cancelled by user"
+      $script:SessionHistory += @{
+        role = "tool"
+        tool_call_id = $ToolCall.id
+        name = "execute"
+        content = "Command: $command`nResult: Cancelled by user"
+      }
+      return $cancelledResult
+    }
+  }
+
+  try {
+    # Execute command and capture output
+    $output = Invoke-Expression -Command $command 2>&1
+    $exitCode = $LASTEXITCODE
+
+    $result = @{
+      command = $command
+      output = if ($output) { $output | Out-String } else { "(no output)" }
+      exitCode = $exitCode
+      timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    }
+
+    $successResult = "Command executed successfully at $($result.timestamp)`nExit Code: $exitCode`nOutput:`n$($result.output)"
+
+    $script:SessionHistory += @{
+      role = "tool"
+      tool_call_id = $ToolCall.id
+      name = "execute"
+      content = "Command: $command`nExit Code: $exitCode`nOutput:`n$($result.output)"
+    }
+
+    return $successResult
+  }
+  catch {
+    $errorResult = "Command failed at $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')`nError: $($_.Exception.Message)"
+
+    $script:SessionHistory += @{
+      role = "tool"
+      tool_call_id = $ToolCall.id
+      name = "execute"
+      content = "Command: $command`nError: $($_.Exception.Message)"
+    }
+
+    return $errorResult
   }
 }
 
@@ -196,11 +299,11 @@ function Get-LLMResponse
   end {
     # Get current configuration dynamically
     $config = Get-PSLLMConfiguration
-    
+
     # Set defaults from dynamic config if not overridden
     if (-not $ApiEndpoint) { $ApiEndpoint = $config.ApiEndpoint }
     if (-not $Model) { $Model = $config.Model }
-    
+
     # Merge explicit context and pipeline context (explicit takes priority)
     $mergedContext = @()
     if ($Context) {
@@ -215,9 +318,9 @@ function Get-LLMResponse
       if ($mergedContext.Count -eq 1 -and $mergedContext[0] -is [string]) {
         $mergedContext[0]
       } else {
-        $mergedContext | ForEach-Object { 
-          if ($_ -is [string]) { $_ } 
-          else { $_ | Out-String -Stream } 
+        $mergedContext | ForEach-Object {
+          if ($_ -is [string]) { $_ }
+          else { $_ | Out-String -Stream }
         } | Out-String
       }
     } else { $null }
@@ -266,7 +369,7 @@ You are STRONGLY ENCOURAGED TO USE TERMINAL COLORS AND FORMATTING in lieu of mar
       } else {
         $UserMessage
       }
-      
+
       $currentMessage = @{
         role = "user"
         content = $finalUserMessage
@@ -280,12 +383,35 @@ You are STRONGLY ENCOURAGED TO USE TERMINAL COLORS AND FORMATTING in lieu of mar
         $script:SessionHistory = $script:SessionHistory[-$config.MaxSessionContextMessages..-1]
       }
 
-      # Prepare the request body
+      # Define available tools
+      $tools = @(
+        @{
+          type = "function"
+          function = @{
+            name = "execute"
+            description = "Execute PowerShell commands in the current environment. Use this for system operations, file management, data processing, or any other PowerShell tasks. Only use for safe, non-destructive operations unless explicitly confirmed by user. The command will be executed with user confirmation."
+            parameters = @{
+              type = "object"
+              properties = @{
+                command = @{
+                  type = "string"
+                  description = "The PowerShell command to execute"
+                }
+              }
+              required = @("command")
+            }
+          }
+        }
+      )
+
+      # Prepare the request body with tools
       $requestBody = @{
-      model = $Model
-      messages = $messages
-      max_tokens = $config.MaxTokens
-      stream = $false
+        model = $Model
+        messages = $messages
+        max_tokens = $config.MaxTokens
+        stream = $false
+        tools = $tools
+        tool_choice = "auto"
       } | ConvertTo-Json -Depth 10
 
       # Prepare HTTP headers
@@ -300,10 +426,75 @@ You are STRONGLY ENCOURAGED TO USE TERMINAL COLORS AND FORMATTING in lieu of mar
       # Make the API request
       $response = Invoke-RestMethod -Uri $ApiEndpoint -Method Post -Headers $headers -Body $requestBody -TimeoutSec $config.RequestTimeout
 
-      # Extract the response
+      # Handle tool calls if present
       if ($response.choices -and $response.choices.Count -gt 0)
       {
-        $responseText = $response.choices[0].message.content.Trim()
+        $choice = $response.choices[0]
+
+        # Check if there are tool calls to execute
+        if ($choice.message.tool_calls)
+        {
+          Write-Verbose "Processing $($choice.message.tool_calls.Count) tool calls"
+
+          # This adds the tool call request assistant message to the history
+          # Without this, the LLM won't understand where the tool call results originate from
+          $messages += $choice.message
+          $script:SessionHistory += $choice.message
+
+          foreach ($toolCall in $choice.message.tool_calls)
+          {
+            if ($toolCall.function.name -eq "execute")
+            {
+              # Execute the command (interally adds tool call results to session history)
+              $toolResult = Invoke-PSLLMTool -ToolCall $toolCall
+
+              # Add tool call response result to messages for next API call
+              $messages += @{
+                role = "tool"
+                tool_call_id = $toolCall.id
+                name = $toolCall.function.name
+                content = $toolResult
+              }
+            }
+          }
+
+          $finalMessages = @()
+
+          # Add updated session history (which now includes tool results from Invoke-PSLLMTool)
+          if ($script:ActiveSession) {
+            # Add system message
+            $finalMessages += @{
+              role = "system"
+              content = $finalSystemPrompt
+            }
+            $finalMessages += $script:SessionHistory
+          } else {
+            # In inactive sessions, we only send the session history relevant to the last tool call
+            $finalMessages += $messages
+          }
+
+          $finalRequestBody = @{
+            model = $Model
+            messages = $finalMessages
+            max_tokens = $config.MaxTokens
+            stream = $false
+          } | ConvertTo-Json -Depth 10
+
+          Write-Verbose "Making follow-up API call with tool results: $finalRequestBody"
+          $finalResponse = Invoke-RestMethod -Uri $ApiEndpoint -Method Post -Headers $headers -Body $finalRequestBody -TimeoutSec $config.RequestTimeout
+
+          # Extract final response
+          if ($finalResponse.choices -and $finalResponse.choices.Count -gt 0)
+          {
+            $responseText = $finalResponse.choices[0].message.content.Trim()
+          } else {
+            Write-Warning "No choices returned from follow-up API call"
+            return $null
+          }
+        } else {
+          # No tool calls, use original response
+          $responseText = $choice.message.content.Trim()
+        }
 
         if ([string]::IsNullOrWhiteSpace($responseText))
         {
@@ -313,14 +504,14 @@ You are STRONGLY ENCOURAGED TO USE TERMINAL COLORS AND FORMATTING in lieu of mar
 
         # Always add response to session history (consistent with user messages)
         $script:SessionHistory += @{role="assistant"; content=$responseText}
-        
+
         # Trim history again if needed (after adding response)
         if ($script:SessionHistory.Count -gt $config.MaxSessionContextMessages) {
           $script:SessionHistory = $script:SessionHistory[-$config.MaxSessionContextMessages..-1]
         }
 
         Write-Verbose "Generated response: $responseText"
-        
+
         # Handle color initialization and response cleaning
         if ($NoColors -or $config.NoColors) {
           # Strip ANSI color codes from response
@@ -403,11 +594,11 @@ function Get-LLMCommand
   end {
     # Get current configuration dynamically
     $config = Get-PSLLMConfiguration
-    
+
     # Set defaults from dynamic config if not overridden
     if (-not $ApiEndpoint) { $ApiEndpoint = $config.ApiEndpoint }
     if (-not $Model) { $Model = $config.Model }
-    
+
     # Construct the system prompt for PowerShell commands
     $systemPrompt = @"
 You are a PowerShell and CLI expert assistant. Generate ONLY the command(s) that accomplish the user's request.
@@ -555,7 +746,7 @@ function Invoke-InsertLastLLMCommand
     #>
   $bufferState = Get-PSConsoleReadLineBufferState
   $currentText = $bufferState.Line.Trim()
-  
+
   # Case 1: Empty buffer → insert last command
   if ([string]::IsNullOrWhiteSpace($currentText)) {
     if ($script:LastLLMCommand) {
@@ -565,7 +756,7 @@ function Invoke-InsertLastLLMCommand
     }
     return
   }
-  
+
   # Case 2: Buffer matches LLM history → cycle to previous
   $currentIndex = $script:LLMCommandHistory.IndexOf($currentText)
   if ($currentIndex -ne -1) {
@@ -574,7 +765,7 @@ function Invoke-InsertLastLLMCommand
     Invoke-ReplacePSConsoleReadLineText -Start 0 -Length $bufferState.Line.Length -ReplacementText $prevCommand
     return
   }
-  
+
   # Case 3: Buffer doesn't match → no-op (silent)
   # Don't disturb user typing
 }
