@@ -8,6 +8,57 @@ $script:LastLLMCommand = $null
 $script:LLMCommandHistory = @()
 $script:ActiveSession = $false
 $script:SessionHistory = @()
+function Get-MessagesForApiCall {
+  <#
+    .SYNOPSIS
+    Build messages array for API call using session history as single source of truth
+    .DESCRIPTION
+    Centralizes message building logic with clear active/inactive session handling
+    .PARAMETER SystemPrompt
+    The system prompt to prepend
+    .PARAMETER ActiveSession
+    Whether the session is currently active
+    #>
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory=$true)]
+    [string]$SystemPrompt,
+
+    [Parameter(Mandatory=$true)]
+    [bool]$ActiveSession
+  )
+
+  $messages = @()
+  
+  # Always start with system prompt
+  $messages += @{
+    role = "system"
+    content = $SystemPrompt
+  }
+
+  if ($ActiveSession) {
+    # Active session: send all session history
+    $messages += $script:SessionHistory
+  } else {
+    # Inactive session: extract last interaction context
+    # Search backwards from end of session history, collect messages until
+    # we hit a role=assistant message with no tool_calls
+    $contextMessages = @()
+    for ($i = $script:SessionHistory.Count - 1; $i -ge 0; $i--) {
+      $msg = $script:SessionHistory[$i]
+
+      if ($msg.role -eq "assistant" -and -not $msg.tool_calls) {
+        break
+      }
+
+      $contextMessages = @($msg) + $contextMessages
+    }
+    $messages += $contextMessages
+  }
+
+  return $messages
+}
+
 #endregion
 
 #region Configuration
@@ -348,20 +399,6 @@ You are STRONGLY ENCOURAGED TO USE TERMINAL COLORS AND FORMATTING in lieu of mar
       # Keep system prompt clean - context goes in user message
       $finalSystemPrompt = $SystemPrompt
 
-      # Build messages array with session history if active
-      $messages = @()
-
-      # Add system message
-      $messages += @{
-        role = "system"
-        content = $finalSystemPrompt
-      }
-
-      if ($script:ActiveSession) {
-        # Add session history first
-        $messages += $script:SessionHistory
-      }
-
       # Create and add current user message with context
       $finalUserMessage = if (-not [string]::IsNullOrWhiteSpace($contextString))
       {
@@ -374,7 +411,6 @@ You are STRONGLY ENCOURAGED TO USE TERMINAL COLORS AND FORMATTING in lieu of mar
         role = "user"
         content = $finalUserMessage
       }
-      $messages += $currentMessage
 
       # Always add to session history (your UX requirement)
       $script:SessionHistory += $currentMessage
@@ -382,6 +418,9 @@ You are STRONGLY ENCOURAGED TO USE TERMINAL COLORS AND FORMATTING in lieu of mar
       if ($script:SessionHistory.Count -gt $config.MaxSessionContextMessages) {
         $script:SessionHistory = $script:SessionHistory[-$config.MaxSessionContextMessages..-1]
       }
+
+      # Build messages for API call using session history as single source of truth
+      $messages = Get-MessagesForApiCall -SystemPrompt $finalSystemPrompt -ActiveSession $script:ActiveSession
 
       # Define available tools
       $tools = @(
@@ -436,8 +475,7 @@ You are STRONGLY ENCOURAGED TO USE TERMINAL COLORS AND FORMATTING in lieu of mar
         {
           Write-Verbose "Processing $($choice.message.tool_calls.Count) tool calls"
 
-          # Add the tool call request assistant message to history and messages
-          $messages += $choice.message
+          # Add the tool call request assistant message to session history
           $script:SessionHistory += $choice.message
 
           foreach ($toolCall in $choice.message.tool_calls)
@@ -456,14 +494,6 @@ You are STRONGLY ENCOURAGED TO USE TERMINAL COLORS AND FORMATTING in lieu of mar
                 "Command: $($toolResult.Command)`nError: $($toolResult.Error)"
               }
 
-              # Add tool call response to messages for next API call
-              $messages += @{
-                role = "tool"
-                tool_call_id = $toolCall.id
-                name = $toolCall.function.name
-                content = $toolContent
-              }
-
               # Add tool call response to session history
               $script:SessionHistory += @{
                 role = "tool"
@@ -474,20 +504,8 @@ You are STRONGLY ENCOURAGED TO USE TERMINAL COLORS AND FORMATTING in lieu of mar
             }
           }
 
-          $finalMessages = @()
-
-          # Add updated session history (which now includes tool results)
-          if ($script:ActiveSession) {
-            # Add system message
-            $finalMessages += @{
-              role = "system"
-              content = $finalSystemPrompt
-            }
-            $finalMessages += $script:SessionHistory
-          } else {
-            # In inactive sessions, we only send the session history relevant to the last tool call
-            $finalMessages += $messages
-          }
+          # Build final messages using session history as single source of truth
+          $finalMessages = Get-MessagesForApiCall -SystemPrompt $finalSystemPrompt -ActiveSession $script:ActiveSession
 
           $finalRequestBody = @{
             model = $Model
