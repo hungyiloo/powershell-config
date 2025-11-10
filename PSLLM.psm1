@@ -324,7 +324,10 @@ function Get-LLMResponse
     [string]$Model,
 
     [Parameter(Mandatory=$false)]
-    [switch]$NoColors
+    [switch]$NoColors,
+
+    [Parameter(Mandatory=$false)]
+    [switch]$SkipUserMessage
   )
 
   begin {
@@ -399,7 +402,7 @@ You are STRONGLY ENCOURAGED TO USE TERMINAL COLORS AND FORMATTING in lieu of mar
       # Keep system prompt clean - context goes in user message
       $finalSystemPrompt = $SystemPrompt
 
-      # Create and add current user message with context
+      # Create and add current user message with context (unless skipping)
       $finalUserMessage = if (-not [string]::IsNullOrWhiteSpace($contextString))
       {
         "$UserMessage`n`n<IMPORTANT_CONTEXT_PROVIDED>`n$contextString`n</IMPORTANT_CONTEXT_PROVIDED>"
@@ -412,11 +415,13 @@ You are STRONGLY ENCOURAGED TO USE TERMINAL COLORS AND FORMATTING in lieu of mar
         content = $finalUserMessage
       }
 
-      # Always add to session history (your UX requirement)
-      $script:SessionHistory += $currentMessage
-      # Trim history if needed (hard cutoff)
-      if ($script:SessionHistory.Count -gt $config.MaxSessionContextMessages) {
-        $script:SessionHistory = $script:SessionHistory[-$config.MaxSessionContextMessages..-1]
+      # Add to session history unless this is a recursive call
+      if (-not $SkipUserMessage) {
+        $script:SessionHistory += $currentMessage
+        # Trim history if needed (hard cutoff)
+        if ($script:SessionHistory.Count -gt $config.MaxSessionContextMessages) {
+          $script:SessionHistory = $script:SessionHistory[-$config.MaxSessionContextMessages..-1]
+        }
       }
 
       # Build messages for API call using session history as single source of truth
@@ -504,27 +509,9 @@ You are STRONGLY ENCOURAGED TO USE TERMINAL COLORS AND FORMATTING in lieu of mar
             }
           }
 
-          # Build final messages using session history as single source of truth
-          $finalMessages = Get-MessagesForApiCall -SystemPrompt $finalSystemPrompt -ActiveSession $script:ActiveSession
-
-          $finalRequestBody = @{
-            model = $Model
-            messages = $finalMessages
-            max_tokens = $config.MaxTokens
-            stream = $false
-          } | ConvertTo-Json -Depth 10
-
-          Write-Verbose "Making follow-up API call with tool results: $finalRequestBody"
-          $finalResponse = Invoke-RestMethod -Uri $ApiEndpoint -Method Post -Headers $headers -Body $finalRequestBody -TimeoutSec $config.RequestTimeout
-
-          # Extract final response
-          if ($finalResponse.choices -and $finalResponse.choices.Count -gt 0)
-          {
-            $responseText = $finalResponse.choices[0].message.content.Trim()
-          } else {
-            Write-Warning "No choices returned from follow-up API call"
-            return $null
-          }
+          # Recursive call with updated session history
+          Write-Verbose "Making recursive API call with tool results"
+          return Get-LLMResponse -UserMessage $UserMessage -SystemPrompt $finalSystemPrompt -ApiEndpoint $ApiEndpoint -Model $Model -NoColors:$NoColors -SkipUserMessage
         } else {
           # No tool calls, use original response
           $responseText = $choice.message.content.Trim()
