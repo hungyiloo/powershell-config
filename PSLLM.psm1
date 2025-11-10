@@ -132,6 +132,7 @@ function Invoke-PSLLMTool
     Execute PowerShell commands and return results to LLM
     .DESCRIPTION
     Executes arbitrary PowerShell commands with user confirmation and safety checks
+    Returns structured data for session history management
     #>
   [CmdletBinding()]
   param(
@@ -167,27 +168,25 @@ function Invoke-PSLLMTool
     Write-Host "🔸 [EXECUTE] $command" -ForegroundColor Yellow
     $confirm = Read-Host "🔸 Are you sure you want to run this? (y/n)"
     if ($confirm -ne 'y' -and $confirm -ne 'Y') {
-      $cancelledResult = "Command cancelled by user"
-      $script:SessionHistory += @{
-        role = "tool"
-        tool_call_id = $ToolCall.id
-        name = "execute"
-        content = "Command: $command`nResult: Cancelled by user"
+      return @{
+        Success = $false
+        Cancelled = $true
+        ToolCallId = $ToolCall.id
+        Command = $command
+        Result = "Command cancelled by user"
       }
-      return $cancelledResult
     }
   } else {
     Write-Host "🔸 [EXECUTE] $command" -ForegroundColor Cyan
     $confirm = Read-Host "🔸 Run this command? (y/n)"
     if ($confirm -ne 'y' -and $confirm -ne 'Y') {
-      $cancelledResult = "Command cancelled by user"
-      $script:SessionHistory += @{
-        role = "tool"
-        tool_call_id = $ToolCall.id
-        name = "execute"
-        content = "Command: $command`nResult: Cancelled by user"
+      return @{
+        Success = $false
+        Cancelled = $true
+        ToolCallId = $ToolCall.id
+        Command = $command
+        Result = "Command cancelled by user"
       }
-      return $cancelledResult
     }
   }
 
@@ -205,26 +204,27 @@ function Invoke-PSLLMTool
 
     $successResult = "Command executed successfully at $($result.timestamp)`nExit Code: $exitCode`nOutput:`n$($result.output)"
 
-    $script:SessionHistory += @{
-      role = "tool"
-      tool_call_id = $ToolCall.id
-      name = "execute"
-      content = "Command: $command`nExit Code: $exitCode`nOutput:`n$($result.output)"
+    return @{
+      Success = $true
+      Cancelled = $false
+      ToolCallId = $ToolCall.id
+      Command = $command
+      ExitCode = $exitCode
+      Output = $result.output
+      Result = $successResult
     }
-
-    return $successResult
   }
   catch {
     $errorResult = "Command failed at $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')`nError: $($_.Exception.Message)"
 
-    $script:SessionHistory += @{
-      role = "tool"
-      tool_call_id = $ToolCall.id
-      name = "execute"
-      content = "Command: $command`nError: $($_.Exception.Message)"
+    return @{
+      Success = $false
+      Cancelled = $false
+      ToolCallId = $ToolCall.id
+      Command = $command
+      Error = $_.Exception.Message
+      Result = $errorResult
     }
-
-    return $errorResult
   }
 }
 
@@ -436,8 +436,7 @@ You are STRONGLY ENCOURAGED TO USE TERMINAL COLORS AND FORMATTING in lieu of mar
         {
           Write-Verbose "Processing $($choice.message.tool_calls.Count) tool calls"
 
-          # This adds the tool call request assistant message to the history
-          # Without this, the LLM won't understand where the tool call results originate from
+          # Add the tool call request assistant message to history and messages
           $messages += $choice.message
           $script:SessionHistory += $choice.message
 
@@ -445,22 +444,39 @@ You are STRONGLY ENCOURAGED TO USE TERMINAL COLORS AND FORMATTING in lieu of mar
           {
             if ($toolCall.function.name -eq "execute")
             {
-              # Execute the command (interally adds tool call results to session history)
+              # Execute the command and get structured result
               $toolResult = Invoke-PSLLMTool -ToolCall $toolCall
 
-              # Add tool call response result to messages for next API call
+              # Build tool response content for API
+              $toolContent = if ($toolResult.Success) {
+                "Command: $($toolResult.Command)`nExit Code: $($toolResult.ExitCode)`nOutput:`n$($toolResult.Output)"
+              } elseif ($toolResult.Cancelled) {
+                "Command: $($toolResult.Command)`nResult: Cancelled by user"
+              } else {
+                "Command: $($toolResult.Command)`nError: $($toolResult.Error)"
+              }
+
+              # Add tool call response to messages for next API call
               $messages += @{
                 role = "tool"
                 tool_call_id = $toolCall.id
                 name = $toolCall.function.name
-                content = $toolResult
+                content = $toolContent
+              }
+
+              # Add tool call response to session history
+              $script:SessionHistory += @{
+                role = "tool"
+                tool_call_id = $toolCall.id
+                name = "execute"
+                content = $toolContent
               }
             }
           }
 
           $finalMessages = @()
 
-          # Add updated session history (which now includes tool results from Invoke-PSLLMTool)
+          # Add updated session history (which now includes tool results)
           if ($script:ActiveSession) {
             # Add system message
             $finalMessages += @{
