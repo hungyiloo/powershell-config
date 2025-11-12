@@ -160,6 +160,101 @@ You are STRONGLY ENCOURAGED TO USE TERMINAL COLORS AND FORMATTING in lieu of mar
   }
 }
 
+function Build-LLMUserMessage {
+  <#
+    .SYNOPSIS
+    Build user message with context integration
+    .DESCRIPTION
+    Constructs the final user message by merging base message with context
+    .PARAMETER UserMessage
+    The base user message
+    .PARAMETER ContextString
+    Merged context string (may be null)
+    #>
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory=$true)]
+    [string]$UserMessage,
+
+    [Parameter(Mandatory=$false)]
+    [string]$ContextString
+  )
+
+  if (-not [string]::IsNullOrWhiteSpace($ContextString)) {
+    return "$UserMessage`n`n<IMPORTANT_CONTEXT_PROVIDED>`n$ContextString`n</IMPORTANT_CONTEXT_PROVIDED>"
+  } else {
+    return $UserMessage
+  }
+}
+
+function Update-LLMSessionHistory {
+  <#
+    .SYNOPSIS
+    Update session history with message and enforce size limits
+    .DESCRIPTION
+    Adds message to session history and trims if needed
+    .PARAMETER Message
+    The message to add to history
+    .PARAMETER Config
+    PSLLM configuration object
+    .PARAMETER SkipUpdate
+    Whether to skip adding this message (for recursive calls)
+    #>
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory=$true)]
+    [object]$Message,
+
+    [Parameter(Mandatory=$true)]
+    [object]$Config,
+
+    [Parameter(Mandatory=$false)]
+    [switch]$SkipUpdate
+  )
+
+  if (-not $SkipUpdate) {
+    $script:SessionHistory += $Message
+    
+    # Trim history if needed (hard cutoff)
+    if ($script:SessionHistory.Count -gt $config.MaxSessionContextMessages) {
+      $script:SessionHistory = $script:SessionHistory[-$config.MaxSessionContextMessages..-1]
+    }
+  }
+}
+
+function Format-LLMResponse {
+  <#
+    .SYNOPSIS
+    Format and clean LLM response based on color preferences
+    .DESCRIPTION
+    Handles ANSI color code processing and response cleaning
+    .PARAMETER ResponseText
+    The raw response text from LLM
+    .PARAMETER NoColors
+    Whether to disable color formatting
+    .PARAMETER Config
+    PSLLM configuration object
+    #>
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory=$true)]
+    [string]$ResponseText,
+
+    [Parameter(Mandatory=$false)]
+    [switch]$NoColors,
+
+    [Parameter(Mandatory=$true)]
+    [object]$Config
+  )
+
+  if ($NoColors -or $config.NoColors) {
+    # Strip ANSI color codes from response
+    return $ResponseText -replace '\x1b\[[0-9;]*m', ''
+  } else {
+    return $ResponseText -replace "\\x1b","`e"
+  }
+}
+
 #endregion
 
 #region Configuration
@@ -471,12 +566,7 @@ function Get-LLMResponse
       $finalSystemPrompt = $SystemPrompt
 
       # Create and add current user message with context (unless skipping)
-      $finalUserMessage = if (-not [string]::IsNullOrWhiteSpace($contextString))
-      {
-        "$UserMessage`n`n<IMPORTANT_CONTEXT_PROVIDED>`n$contextString`n</IMPORTANT_CONTEXT_PROVIDED>"
-      } else {
-        $UserMessage
-      }
+      $finalUserMessage = Build-LLMUserMessage -UserMessage $UserMessage -ContextString $contextString
 
       $currentMessage = @{
         role = "user"
@@ -484,13 +574,7 @@ function Get-LLMResponse
       }
 
       # Add to session history unless this is a recursive call
-      if (-not $SkipUserMessage) {
-        $script:SessionHistory += $currentMessage
-        # Trim history if needed (hard cutoff)
-        if ($script:SessionHistory.Count -gt $config.MaxSessionContextMessages) {
-          $script:SessionHistory = $script:SessionHistory[-$config.MaxSessionContextMessages..-1]
-        }
-      }
+      Update-LLMSessionHistory -Message $currentMessage -Config $config -SkipUpdate:$SkipUserMessage
 
       # Build messages for API call using session history as single source of truth
       $messages = Get-MessagesForApiCall -SystemPrompt $finalSystemPrompt -ActiveSession $script:ActiveSession
@@ -592,23 +676,12 @@ function Get-LLMResponse
         }
 
         # Always add response to session history (consistent with user messages)
-        $script:SessionHistory += @{role="assistant"; content=$responseText}
-
-        # Trim history again if needed (after adding response)
-        if ($script:SessionHistory.Count -gt $config.MaxSessionContextMessages) {
-          $script:SessionHistory = $script:SessionHistory[-$config.MaxSessionContextMessages..-1]
-        }
+        Update-LLMSessionHistory -Message @{role="assistant"; content=$responseText} -Config $config
 
         Write-Verbose "Generated response: $responseText"
 
         # Handle color initialization and response cleaning
-        if ($NoColors -or $config.NoColors) {
-          # Strip ANSI color codes from response
-          $cleanResponse = $responseText -replace '\x1b\[[0-9;]*m', ''
-          return $cleanResponse
-        } else {
-          return $responseText -replace "\\x1b","`e"
-        }
+        return Format-LLMResponse -ResponseText $responseText -NoColors:$NoColors -Config $config
       } else
       {
         Write-Warning "No choices returned from LLM API"
