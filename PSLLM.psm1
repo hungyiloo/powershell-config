@@ -42,21 +42,122 @@ function Get-MessagesForApiCall {
   } else {
     # Inactive session: extract last interaction context
     # Search backwards from end of session history, collect messages until
-    # we hit a role=assistant message with no tool_calls
+    # we hit a role=user message, which captures the last interaction
     $contextMessages = @()
     for ($i = $script:SessionHistory.Count - 1; $i -ge 0; $i--) {
       $msg = $script:SessionHistory[$i]
+      $contextMessages = @($msg) + $contextMessages
 
-      if ($msg.role -eq "assistant" -and -not $msg.tool_calls) {
+      if ($msg.role -eq "user") {
         break
       }
-
-      $contextMessages = @($msg) + $contextMessages
     }
     $messages += $contextMessages
   }
 
   return $messages
+}
+
+#endregion
+
+#region Private Helper Functions
+
+function Get-LLMApiKey {
+  <#
+    .SYNOPSIS
+    Get PSLLM_API_KEY environment variable
+    .DESCRIPTION
+    Centralized API key retrieval with validation
+    #>
+  [CmdletBinding()]
+  param()
+
+  $apiKey = $env:PSLLM_API_KEY
+  if ([string]::IsNullOrWhiteSpace($apiKey)) {
+    Write-Error "PSLLM_API_KEY environment variable not set"
+    return $null
+  }
+  return $apiKey
+}
+
+function Merge-LLMContext {
+  <#
+    .SYNOPSIS
+    Merge explicit context and pipeline context into unified string
+    .DESCRIPTION
+    Handles context merging with explicit context taking priority over pipeline
+    .PARAMETER Context
+    Explicit context provided via parameter
+    .PARAMETER PipelineContext
+    Context collected from pipeline input
+    #>
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory=$false)]
+    [object[]]$Context,
+
+    [Parameter(Mandatory=$false)]
+    [object[]]$PipelineContext
+  )
+
+  # Merge explicit context and pipeline context (explicit takes priority)
+  $mergedContext = @()
+  if ($Context) {
+    $mergedContext += $Context
+  }
+  if ($PipelineContext.Count -gt 0) {
+    $mergedContext += $PipelineContext
+  }
+
+  # Convert context objects to strings for LLM consumption
+  if ($mergedContext.Count -gt 0) {
+    if ($mergedContext.Count -eq 1 -and $mergedContext[0] -is [string]) {
+      return $mergedContext[0]
+    } else {
+      return $mergedContext | ForEach-Object {
+        if ($_ -is [string]) { $_ }
+        else { $_ | Out-String -Stream }
+      } | Out-String
+    }
+  } else {
+    return $null
+  }
+}
+
+function Get-LLMDefaultSystemPrompt {
+  <#
+    .SYNOPSIS
+    Generate default system prompt based on color preferences
+    .DESCRIPTION
+    Creates appropriate system prompt with or without ANSI color support
+    .PARAMETER NoColors
+    Whether to disable color formatting in the prompt
+    .PARAMETER Config
+    PSLLM configuration object
+    #>
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory=$false)]
+    [switch]$NoColors,
+
+    [Parameter(Mandatory=$true)]
+    [object]$Config
+  )
+
+  if ($NoColors -or $Config.NoColors) {
+    return @"
+You are a helpful assistant in a pwsh terminal. Be concise. Keep your lines under 80 chars.
+Use neat plain text layout and **AVOID ALL MARKDOWN FORMATTING** unless otherwise instructed. ASCII/Unicode diagrams and tables are encouraged.
+Return clean text without ANSI color codes.
+"@
+  } else {
+    return @"
+You are a helpful assistant in a pwsh terminal. Be concise. Keep your lines under 80 chars.
+Use neat text layout and **AVOID ALL MARKDOWN FORMATTING** unless otherwise instructed. ASCII/Unicode diagrams and tables are encouraged.
+You are encouraged to judiciously use ANSI escape codes for colors and formatting (bold, underline, background colors). e.g. \x1b[31m
+You are STRONGLY ENCOURAGED TO USE TERMINAL COLORS AND FORMATTING in lieu of markdown to emphasize headings, important phrases and to add visual separation to your reply.
+"@
+  }
 }
 
 #endregion
@@ -331,11 +432,9 @@ function Get-LLMResponse
   )
 
   begin {
-    # Validate API key
-    $apiKey = $env:PSLLM_API_KEY
-    if ([string]::IsNullOrWhiteSpace($apiKey))
-    {
-      Write-Error "PSLLM_API_KEY environment variable not set"
+    # Get API key using extracted function
+    $apiKey = Get-LLMApiKey
+    if ($null -eq $apiKey) {
       return
     }
 
@@ -358,45 +457,14 @@ function Get-LLMResponse
     if (-not $ApiEndpoint) { $ApiEndpoint = $config.ApiEndpoint }
     if (-not $Model) { $Model = $config.Model }
 
-    # Merge explicit context and pipeline context (explicit takes priority)
-    $mergedContext = @()
-    if ($Context) {
-      $mergedContext += $Context
-    }
-    if ($collectedPipelineContext.Count -gt 0) {
-      $mergedContext += $collectedPipelineContext
-    }
-
-    # Convert context objects to strings for LLM consumption
-    $contextString = if ($mergedContext.Count -gt 0) {
-      if ($mergedContext.Count -eq 1 -and $mergedContext[0] -is [string]) {
-        $mergedContext[0]
-      } else {
-        $mergedContext | ForEach-Object {
-          if ($_ -is [string]) { $_ }
-          else { $_ | Out-String -Stream }
-        } | Out-String
-      }
-    } else { $null }
+    # Merge context using extracted function
+    $contextString = Merge-LLMContext -Context $Context -PipelineContext $collectedPipelineContext
 
     try
     {
       # Assign a default system prompt if none was specified
       if ([string]::IsNullOrWhiteSpace($SystemPrompt)) {
-        if ($NoColors -or $config.NoColors) {
-          $SystemPrompt = @"
-You are a helpful assistant in a pwsh terminal. Be concise. Keep your lines under 80 chars.
-Use neat plain text layout and **AVOID ALL MARKDOWN FORMATTING** unless otherwise instructed. ASCII/Unicode diagrams and tables are encouraged.
-Return clean text without ANSI color codes.
-"@
-        } else {
-          $SystemPrompt = @"
-You are a helpful assistant in a pwsh terminal. Be concise. Keep your lines under 80 chars.
-Use neat text layout and **AVOID ALL MARKDOWN FORMATTING** unless otherwise instructed. ASCII/Unicode diagrams and tables are encouraged.
-You are encouraged to judiciously use ANSI escape codes for colors and formatting (bold, underline, background colors). e.g. \\x1b[31m
-You are STRONGLY ENCOURAGED TO USE TERMINAL COLORS AND FORMATTING in lieu of markdown to emphasize headings, important phrases and to add visual separation to your reply.
-"@
-        }
+        $SystemPrompt = Get-LLMDefaultSystemPrompt -NoColors:$NoColors -Config $config
       }
 
       # Keep system prompt clean - context goes in user message
