@@ -255,6 +255,157 @@ function Format-LLMResponse {
   }
 }
 
+function Build-LLMApiRequest {
+  <#
+    .SYNOPSIS
+    Build API request body and headers for LLM call
+    .DESCRIPTION
+    Constructs the complete request including tools, messages, and authentication
+    .PARAMETER Model
+    The model to use for the request
+    .PARAMETER Messages
+    The message array for the conversation
+    .PARAMETER ApiKey
+    The API key for authentication
+    .PARAMETER Config
+    PSLLM configuration object
+    #>
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory=$true)]
+    [string]$Model,
+
+    [Parameter(Mandatory=$true)]
+    [object[]]$Messages,
+
+    [Parameter(Mandatory=$true)]
+    [string]$ApiKey,
+
+    [Parameter(Mandatory=$true)]
+    [object]$Config
+  )
+
+  # Define available tools
+  $tools = @(
+    @{
+      type = "function"
+      function = @{
+        name = "execute"
+        description = "Execute PowerShell commands in the current environment. Use this for system operations, file management, data processing, or any other PowerShell tasks. Only use for safe, non-destructive operations unless explicitly confirmed by user. The command will be executed with user confirmation."
+        parameters = @{
+          type = "object"
+          properties = @{
+            command = @{
+              type = "string"
+              description = "The PowerShell command to execute"
+            }
+          }
+          required = @("command")
+        }
+      }
+    }
+  )
+
+  # Prepare the request body with tools
+  $requestBody = @{
+    model = $Model
+    messages = $Messages
+    max_tokens = $config.MaxTokens
+    stream = $false
+    tools = $tools
+    tool_choice = "auto"
+  } | ConvertTo-Json -Depth 10
+
+  # Prepare HTTP headers
+  $headers = @{
+    "Authorization" = "Bearer $ApiKey"
+    "Content-Type" = "application/json"
+  }
+
+  return @{
+    Body = $requestBody
+    Headers = $headers
+  }
+}
+
+function Process-LLMToolCalls {
+  <#
+    .SYNOPSIS
+    Process tool calls from LLM response and update session history
+    .DESCRIPTION
+    Executes tool calls and handles recursive API calls with results
+    .PARAMETER ToolCalls
+    The tool calls array from LLM response
+    .PARAMETER UserMessage
+    The original user message for recursive call
+    .PARAMETER SystemPrompt
+    The system prompt for recursive call
+    .PARAMETER ApiEndpoint
+    The API endpoint for recursive call
+    .PARAMETER Model
+    The model for recursive call
+    .PARAMETER NoColors
+    Whether to disable colors in recursive call
+    #>
+  [CmdletBinding()]
+  param(
+    [Parameter(Mandatory=$true)]
+    [object[]]$ToolCalls,
+
+    [Parameter(Mandatory=$true)]
+    [string]$UserMessage,
+
+    [Parameter(Mandatory=$true)]
+    [string]$SystemPrompt,
+
+    [Parameter(Mandatory=$true)]
+    [string]$ApiEndpoint,
+
+    [Parameter(Mandatory=$true)]
+    [string]$Model,
+
+    [Parameter(Mandatory=$false)]
+    [switch]$NoColors
+  )
+
+  Write-Verbose "Processing $($ToolCalls.Count) tool calls"
+
+  # Add the tool call request assistant message to session history
+  $script:SessionHistory += @{
+    role = "assistant"
+    content = $null
+    tool_calls = $ToolCalls
+  }
+
+  foreach ($toolCall in $ToolCalls) {
+    if ($toolCall.function.name -eq "execute") {
+      # Execute the command and get structured result
+      $toolResult = Invoke-PSLLMTool -ToolCall $toolCall
+
+      # Build tool response content for API
+      $toolContent = if ($toolResult.Success) {
+        "Command: $($toolResult.Command)`nExit Code: $($toolResult.ExitCode)`nOutput:`n$($toolResult.Output)"
+      } elseif ($toolResult.Cancelled) {
+        "Command: $($toolResult.Command)`nResult: Cancelled by user"
+      } else {
+        "Command: $($toolResult.Command)`nError: $($toolResult.Error)"
+      }
+
+      # Add tool call response to session history
+      $script:SessionHistory += @{
+        role = "tool"
+        tool_call_id = $toolCall.id
+        name = "execute"
+        content = $toolContent
+      }
+    }
+  }
+
+  # Recursive call with updated session history
+  Write-Verbose "Making recursive API call with tool results"
+  return Get-LLMResponse -UserMessage $UserMessage -SystemPrompt $SystemPrompt -ApiEndpoint $ApiEndpoint -Model $Model -NoColors:$NoColors -SkipUserMessage
+}
+
 #endregion
 
 #region Configuration
@@ -579,48 +730,14 @@ function Get-LLMResponse
       # Build messages for API call using session history as single source of truth
       $messages = Get-MessagesForApiCall -SystemPrompt $finalSystemPrompt -ActiveSession $script:ActiveSession
 
-      # Define available tools
-      $tools = @(
-        @{
-          type = "function"
-          function = @{
-            name = "execute"
-            description = "Execute PowerShell commands in the current environment. Use this for system operations, file management, data processing, or any other PowerShell tasks. Only use for safe, non-destructive operations unless explicitly confirmed by user. The command will be executed with user confirmation."
-            parameters = @{
-              type = "object"
-              properties = @{
-                command = @{
-                  type = "string"
-                  description = "The PowerShell command to execute"
-                }
-              }
-              required = @("command")
-            }
-          }
-        }
-      )
-
-      # Prepare the request body with tools
-      $requestBody = @{
-        model = $Model
-        messages = $messages
-        max_tokens = $config.MaxTokens
-        stream = $false
-        tools = $tools
-        tool_choice = "auto"
-      } | ConvertTo-Json -Depth 10
-
-      # Prepare HTTP headers
-      $headers = @{
-        "Authorization" = "Bearer $apiKey"
-        "Content-Type" = "application/json"
-      }
+      # Build API request using extracted function
+      $apiRequest = Build-LLMApiRequest -Model $Model -Messages $messages -ApiKey $apiKey -Config $config
 
       Write-Verbose "Querying LLM API: $ApiEndpoint"
-      Write-Verbose "Request: $requestBody"
+      Write-Verbose "Request: $($apiRequest.Body)"
 
       # Make the API request
-      $response = Invoke-RestMethod -Uri $ApiEndpoint -Method Post -Headers $headers -Body $requestBody -TimeoutSec $config.RequestTimeout
+      $response = Invoke-RestMethod -Uri $ApiEndpoint -Method Post -Headers $apiRequest.Headers -Body $apiRequest.Body -TimeoutSec $config.RequestTimeout
 
       # Handle tool calls if present
       if ($response.choices -and $response.choices.Count -gt 0)
@@ -630,40 +747,8 @@ function Get-LLMResponse
         # Check if there are tool calls to execute
         if ($choice.message.tool_calls)
         {
-          Write-Verbose "Processing $($choice.message.tool_calls.Count) tool calls"
-
-          # Add the tool call request assistant message to session history
-          $script:SessionHistory += $choice.message
-
-          foreach ($toolCall in $choice.message.tool_calls)
-          {
-            if ($toolCall.function.name -eq "execute")
-            {
-              # Execute the command and get structured result
-              $toolResult = Invoke-PSLLMTool -ToolCall $toolCall
-
-              # Build tool response content for API
-              $toolContent = if ($toolResult.Success) {
-                "Command: $($toolResult.Command)`nExit Code: $($toolResult.ExitCode)`nOutput:`n$($toolResult.Output)"
-              } elseif ($toolResult.Cancelled) {
-                "Command: $($toolResult.Command)`nResult: Cancelled by user"
-              } else {
-                "Command: $($toolResult.Command)`nError: $($toolResult.Error)"
-              }
-
-              # Add tool call response to session history
-              $script:SessionHistory += @{
-                role = "tool"
-                tool_call_id = $toolCall.id
-                name = "execute"
-                content = $toolContent
-              }
-            }
-          }
-
-          # Recursive call with updated session history
-          Write-Verbose "Making recursive API call with tool results"
-          return Get-LLMResponse -UserMessage $UserMessage -SystemPrompt $finalSystemPrompt -ApiEndpoint $ApiEndpoint -Model $Model -NoColors:$NoColors -SkipUserMessage
+          # Process tool calls using extracted function
+          return Process-LLMToolCalls -ToolCalls $choice.message.tool_calls -UserMessage $UserMessage -SystemPrompt $finalSystemPrompt -ApiEndpoint $ApiEndpoint -Model $Model -NoColors:$NoColors
         } else {
           # No tool calls, use original response
           $responseText = $choice.message.content.Trim()
