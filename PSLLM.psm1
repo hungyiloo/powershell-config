@@ -424,7 +424,7 @@ function Get-PSLLMConfiguration {
     ApiEndpoint = ($env:PSLLM_API_ENDPOINT ?? "https://api.openai.com/v1") + "/chat/completions"
     Model = $env:PSLLM_MODEL ?? "gpt-4o-mini"
     MaxTokens = [int]($env:PSLLM_MAX_TOKENS ?? 500)
-    RequestTimeout = [int]($env:PSLLM_REQUEST_TIMEOUT ?? 40)
+    RequestTimeout = [int]($env:PSLLM_REQUEST_TIMEOUT ?? 300)
     NoColors = [bool]($env:PSLLM_NO_COLORS ?? $false)
     MaxCommandHistorySize = [int]($env:PSLLM_MAX_COMMAND_HISTORY_SIZE ?? 50)
     MaxSessionContextMessages = [int]($env:PSLLM_MAX_SESSION_CONTEXT_MESSAGES ?? 20)
@@ -848,10 +848,12 @@ function Get-LLMCommand
 
     # Construct the system prompt for PowerShell commands
     $systemPrompt = @"
-You are a PowerShell and CLI expert assistant. Generate ONLY the command(s) that accomplish the user's request.
+You are a PowerShell and CLI expert assistant. Output ONLY the command(s) that accomplish the user's request NOT in a tool call.
 
 Rules:
 - Return ONLY the command code, no explanations
+- IMPORTANT: DO NOT OUTPUT THE COMMAND USING THE ``execute`` TOOL; you are to REPLY with the command, not execute it
+- You *MAY* use ``execute`` to gather critical context IN ORDER TO generate your final command, but it is only for exploration purposes, not for final output
 - Return ONLY ONE SOLUTION; it may be multiple commands, but *never return more than one way to do the same thing*
 - The solution should match what the user asked; NO MORE
 - Assume a pwsh environment, e.g. don't use bash piping
