@@ -589,18 +589,27 @@ function Invoke-PSLLMTool
   }
 
   try {
-    # Execute command and capture output
+    $startTime = Get-Date
+    
+    # Execute command and capture output while showing it to user
     $output = Invoke-Expression -Command $command 2>&1
     $exitCode = $LASTEXITCODE
+    $duration = (Get-Date) - $startTime
+
+    # Display output to user if there is any
+    if ($output) {
+      $output | ForEach-Object { Write-Host $_ -ForegroundColor DarkGray}
+    }
 
     $result = @{
       command = $command
       output = if ($output) { $output | Out-String } else { "(no output)" }
       exitCode = $exitCode
       timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+      duration = $duration.TotalSeconds
     }
 
-    $successResult = "Command executed successfully at $($result.timestamp)`nExit Code: $exitCode`nOutput:`n$($result.output)"
+    $successResult = "Command executed successfully at $($result.timestamp)`nDuration: $($result.duration)s`nExit Code: $exitCode`nOutput:`n$($result.output)"
 
     return @{
       Success = $true
@@ -613,6 +622,9 @@ function Invoke-PSLLMTool
     }
   }
   catch {
+    Write-Host " ✗" -ForegroundColor Red
+    Write-Host "❌ Execution failed: $($_.Exception.Message)" -ForegroundColor Red
+    
     $errorResult = "Command failed at $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')`nError: $($_.Exception.Message)"
 
     return @{
