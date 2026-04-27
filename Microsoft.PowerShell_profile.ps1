@@ -24,7 +24,7 @@ function Invoke-My-La { eza --icons=always --color=auto -la $args }
 Set-Alias -Name la -Value Invoke-My-La
 
 # set up "bat" to replace "cat"
-Set-Alias -Name cat -Value bat
+# Set-Alias -Name cat -Value bat
 
 # set up shortcut for lazygit
 Set-Alias -Name lg -Value lazygit
