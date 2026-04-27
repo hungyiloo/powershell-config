@@ -1,1 +1,3 @@
-Modules
+Modules/**/*
+!Modules/ClaudeAccount
+!Modules/ClaudeAccount/**
