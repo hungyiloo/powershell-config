@@ -214,10 +214,21 @@ function Update-LLMSessionHistory {
 
   if (-not $SkipUpdate) {
     $script:SessionHistory += $Message
-    
-    # Trim history if needed (hard cutoff)
-    if ($script:SessionHistory.Count -gt $config.MaxSessionContextMessages) {
-      $script:SessionHistory = $script:SessionHistory[-$config.MaxSessionContextMessages..-1]
+
+    # Trim history if needed (hard cutoff to the most recent N messages).
+    if ($script:SessionHistory.Count -gt $Config.MaxSessionContextMessages) {
+      $trimmed = @($script:SessionHistory[-$Config.MaxSessionContextMessages..-1])
+
+      # The cut can land mid tool-exchange, orphaning a "tool" message whose
+      # preceding assistant(tool_calls) was dropped — which the API rejects (a tool
+      # message must follow its tool_calls). Drop any leading orphan tool messages
+      # so the window always starts on a clean boundary.
+      while ($trimmed.Count -gt 0 -and $trimmed[0].role -eq 'tool') {
+        if ($trimmed.Count -eq 1) { $trimmed = @(); break }
+        $trimmed = @($trimmed[1..($trimmed.Count - 1)])
+      }
+
+      $script:SessionHistory = $trimmed
     }
   }
 }
@@ -282,7 +293,10 @@ function Build-LLMApiRequest {
     [string]$ApiKey,
 
     [Parameter(Mandatory=$true)]
-    [object]$Config
+    [object]$Config,
+
+    [Parameter(Mandatory=$false)]
+    [switch]$NoTools
   )
 
   # Define available tools
@@ -306,14 +320,19 @@ function Build-LLMApiRequest {
     }
   )
 
-  # Prepare the request body with tools
+  # Prepare the request body
   $requestBody = @{
     model = $Model
     messages = $Messages
     max_tokens = $config.MaxTokens
     stream = $false
-    tools = $tools
-    tool_choice = "auto"
+  }
+
+  # Attach the execute tool unless suppressed. The command-completion path passes
+  # -NoTools so a completion can never run commands as a side effect.
+  if (-not $NoTools) {
+    $requestBody.tools = $tools
+    $requestBody.tool_choice = "auto"
   }
 
   # Thinking suppression. Gemma 4 accepts only "minimal"; other models may want
@@ -374,10 +393,13 @@ function Process-LLMToolCalls {
     [string]$Model,
 
     [Parameter(Mandatory=$false)]
-    [switch]$NoColors
+    [switch]$NoColors,
+
+    [Parameter(Mandatory=$false)]
+    [int]$Depth = 0
   )
 
-  Write-Verbose "Processing $($ToolCalls.Count) tool calls"
+  Write-Verbose "Processing $($ToolCalls.Count) tool calls (depth $Depth)"
 
   # Add the tool call request assistant message to session history
   $script:SessionHistory += @{
@@ -410,9 +432,10 @@ function Process-LLMToolCalls {
     }
   }
 
-  # Recursive call with updated session history
+  # Recursive call with updated session history. Carry the incremented depth so
+  # Get-LLMResponse can stop runaway tool loops.
   Write-Verbose "Making recursive API call with tool results"
-  return Get-LLMResponse -UserMessage $UserMessage -SystemPrompt $SystemPrompt -ApiEndpoint $ApiEndpoint -Model $Model -NoColors:$NoColors -SkipUserMessage
+  return Get-LLMResponse -UserMessage $UserMessage -SystemPrompt $SystemPrompt -ApiEndpoint $ApiEndpoint -Model $Model -NoColors:$NoColors -SkipUserMessage -ToolCallDepth ($Depth + 1)
 }
 
 #endregion
@@ -435,6 +458,11 @@ function Get-PSLLMConfiguration {
     ReasoningEffort = $env:PSLLM_REASONING_EFFORT ?? "minimal"
     MaxTokens = [int]($env:PSLLM_MAX_TOKENS ?? 500)
     RequestTimeout = [int]($env:PSLLM_REQUEST_TIMEOUT ?? 300)
+    # Shorter timeout for the interactive keybinding path so a stalled request
+    # fails fast instead of hanging the PSReadLine handler (no true cancellation).
+    CompletionTimeout = [int]($env:PSLLM_COMPLETION_TIMEOUT ?? 20)
+    # Max recursive tool-call rounds before we stop and return the model's text.
+    MaxToolCallDepth = [int]($env:PSLLM_MAX_TOOL_CALL_DEPTH ?? 5)
     NoColors = [bool]($env:PSLLM_NO_COLORS ?? $false)
     MaxCommandHistorySize = [int]($env:PSLLM_MAX_COMMAND_HISTORY_SIZE ?? 50)
     MaxSessionContextMessages = [int]($env:PSLLM_MAX_SESSION_CONTEXT_MESSAGES ?? 20)
@@ -548,7 +576,10 @@ function Invoke-PSLLMTool
     [object]$ToolCall
   )
 
-  # Check for dangerous commands and warn user
+  # Heuristic warning only — NOT a security boundary. This blocklist is trivially
+  # bypassed (aliases, piping, encoding) and merely escalates the confirmation
+  # prompt's wording/colour. The real gate is the y/n confirm below, which applies
+  # to EVERY command regardless of whether a pattern matched.
   $dangerousPatterns = @(
     'rm\s+-rf',
     'remove-item.*-recurse',
@@ -600,10 +631,17 @@ function Invoke-PSLLMTool
 
   try {
     $startTime = Get-Date
-    
+
+    # $LASTEXITCODE only updates for native executables; for pure cmdlets it stays
+    # stale from a prior native call. Snapshot it first so we can tell whether THIS
+    # command actually set it, and fall back to $? (reliable for both) otherwise.
+    $preExit = $LASTEXITCODE
+
     # Execute command and capture output while showing it to user
     $output = Invoke-Expression -Command $command 2>&1
-    $exitCode = $LASTEXITCODE
+    $invokeOk = $?
+    $ranNative = ($LASTEXITCODE -ne $preExit)
+    $exitCode = if ($ranNative) { $LASTEXITCODE } elseif ($invokeOk) { 0 } else { 1 }
     $duration = (Get-Date) - $startTime
 
     # Display output to user if there is any
@@ -696,7 +734,16 @@ function Get-LLMResponse
     [switch]$NoColors,
 
     [Parameter(Mandatory=$false)]
-    [switch]$SkipUserMessage
+    [switch]$SkipUserMessage,
+
+    [Parameter(Mandatory=$false)]
+    [switch]$NoTools,
+
+    [Parameter(Mandatory=$false)]
+    [int]$ToolCallDepth = 0,
+
+    [Parameter(Mandatory=$false)]
+    [int]$TimeoutSec = 0
   )
 
   begin {
@@ -724,6 +771,9 @@ function Get-LLMResponse
     # Set defaults from dynamic config if not overridden
     if (-not $ApiEndpoint) { $ApiEndpoint = $config.ApiEndpoint }
     if (-not $Model) { $Model = $config.Model }
+
+    # Caller can pass a shorter timeout (e.g. the completion path); 0 = use config.
+    $effectiveTimeout = if ($TimeoutSec -gt 0) { $TimeoutSec } else { $config.RequestTimeout }
 
     # Merge context using extracted function
     $contextString = Merge-LLMContext -Context $Context -PipelineContext $collectedPipelineContext
@@ -753,27 +803,31 @@ function Get-LLMResponse
       $messages = Get-MessagesForApiCall -SystemPrompt $finalSystemPrompt -ActiveSession $script:ActiveSession
 
       # Build API request using extracted function
-      $apiRequest = Build-LLMApiRequest -Model $Model -Messages $messages -ApiKey $apiKey -Config $config
+      $apiRequest = Build-LLMApiRequest -Model $Model -Messages $messages -ApiKey $apiKey -Config $config -NoTools:$NoTools
 
       Write-Verbose "Querying LLM API: $ApiEndpoint"
       Write-Verbose "Request: $($apiRequest.Body)"
 
       # Make the API request
-      $response = Invoke-RestMethod -Uri $ApiEndpoint -Method Post -Headers $apiRequest.Headers -Body $apiRequest.Body -TimeoutSec $config.RequestTimeout
+      $response = Invoke-RestMethod -Uri $ApiEndpoint -Method Post -Headers $apiRequest.Headers -Body $apiRequest.Body -TimeoutSec $effectiveTimeout
 
       # Handle tool calls if present
       if ($response.choices -and $response.choices.Count -gt 0)
       {
         $choice = $response.choices[0]
 
-        # Check if there are tool calls to execute
-        if ($choice.message.tool_calls)
+        # Check if there are tool calls to execute (and we haven't hit the depth cap)
+        if ($choice.message.tool_calls -and $ToolCallDepth -lt $config.MaxToolCallDepth)
         {
           # Process tool calls using extracted function
-          return Process-LLMToolCalls -ToolCalls $choice.message.tool_calls -UserMessage $UserMessage -SystemPrompt $finalSystemPrompt -ApiEndpoint $ApiEndpoint -Model $Model -NoColors:$NoColors
+          return Process-LLMToolCalls -ToolCalls $choice.message.tool_calls -UserMessage $UserMessage -SystemPrompt $finalSystemPrompt -ApiEndpoint $ApiEndpoint -Model $Model -NoColors:$NoColors -Depth $ToolCallDepth
         } else {
-          # No tool calls, use original response
-          $responseText = $choice.message.content.Trim()
+          if ($choice.message.tool_calls) {
+            Write-Warning "Max tool-call depth ($($config.MaxToolCallDepth)) reached; returning the model's text without further tool execution."
+          }
+          # No (further) tool calls — use the response text. Content can be null when
+          # the model only returned tool_calls, so coalesce before trimming.
+          $responseText = ($choice.message.content ?? "").Trim()
 
           # Strip <thought>...</thought> reasoning blocks emitted by thinking models
           # (e.g. Gemma 4). reasoning_effort="minimal" normally suppresses these at the
@@ -858,7 +912,10 @@ function Get-LLMCommand
     [string]$ApiEndpoint,
 
     [Parameter(Mandatory=$false)]
-    [string]$Model
+    [string]$Model,
+
+    [Parameter(Mandatory=$false)]
+    [int]$TimeoutSec = 0
   )
 
   begin {
@@ -887,8 +944,7 @@ You are a PowerShell and CLI expert assistant. Output ONLY the command(s) that a
 
 Rules:
 - Return ONLY the command code, no explanations
-- IMPORTANT: DO NOT OUTPUT THE COMMAND USING THE ``execute`` TOOL; you are to REPLY with the command, not execute it
-- You *MAY* use ``execute`` to gather critical context IN ORDER TO generate your final command, but it is only for exploration purposes, not for final output
+- Reply with the command as text; do not attempt to run anything
 - Return ONLY ONE SOLUTION; it may be multiple commands, but *never return more than one way to do the same thing*
 - The solution should match what the user asked; NO MORE
 - Assume a pwsh environment, e.g. don't use bash piping
@@ -903,14 +959,15 @@ Rules:
 "@
 
     # Construct the user message
-      $userMessage = if (-not [string]::IsNullOrWhiteSpace($collectedPipelineContext) || -not [string]::IsNullOrWhiteSpace($Context)) {
+      $userMessage = if (-not [string]::IsNullOrWhiteSpace($collectedPipelineContext) -or -not [string]::IsNullOrWhiteSpace($Context)) {
         "Complete this rest of this command (or rewrite/improve it if you can't complete it): $Description (YOU MUST CONSIDER THE IMPORTANT_CONTEXT_PROVIDED)"
       } else {
         "Complete this rest of this command (or rewrite/improve it if you can't complete it): $Description"
       }
 
-    # Get response from the base function (always disable colors for commands)
-    $rawResponse = Get-LLMResponse -UserMessage $userMessage -SystemPrompt $systemPrompt -Context $Context -PipelineContext $collectedPipelineContext -ApiEndpoint $ApiEndpoint -Model $Model -NoColors
+    # Get response from the base function. Always disable colors for commands, and
+    # -NoTools so generating a command can never trigger execute confirmations.
+    $rawResponse = Get-LLMResponse -UserMessage $userMessage -SystemPrompt $systemPrompt -Context $Context -PipelineContext $collectedPipelineContext -ApiEndpoint $ApiEndpoint -Model $Model -NoColors -NoTools -TimeoutSec $TimeoutSec
 
     if ($null -eq $rawResponse) {
       return $null
@@ -981,39 +1038,36 @@ function Invoke-LLMCompleteCurrentLine
   [CmdletBinding()]
   param()
 
+  $config = Get-PSLLMConfiguration
   $bufferState = Get-PSConsoleReadLineBufferState
   $currentLine = $bufferState.Line
 
   if ([string]::IsNullOrWhiteSpace($currentLine))
   {
-    Write-Host "🤖 Enter a description first, then use Ctrl+Alt+K to insert the last LLM command" -ForegroundColor Yellow
+    Write-Host "`n🤖 Enter a description first, then use Ctrl+Alt+K to insert the last LLM command" -ForegroundColor Yellow
+    [Microsoft.PowerShell.PSConsoleReadLine]::InvokePrompt()
     return
   }
 
-  # Clear current line
-  [System.Console]::SetCursorPosition(0, [System.Console]::CursorTop)
-  Write-Host (" " * ([System.Console]::WindowWidth - 1)) -NoNewline
-  [System.Console]::SetCursorPosition(0, [System.Console]::CursorTop)
+  # Show a transient status on a fresh line BELOW the buffer. Writing on its own
+  # line (rather than overwriting the buffer's row with WindowWidth math) is safe
+  # regardless of whether the buffer wraps across multiple rows or the terminal
+  # was resized. InvokePrompt() then redraws the prompt and clears the status.
+  Write-Host "`n🤖 Completing with LLM..." -ForegroundColor Yellow -NoNewline
 
-  # Show loading indicator
-  Write-Host "🤖 Completing with LLM..." -ForegroundColor Yellow -NoNewline
-
-  # Use current line as context for completion
-  $generatedCommand = Get-LLMCommand -Description "$currentLine"
-
-  # Clear loading line
-  [System.Console]::SetCursorPosition(0, [System.Console]::CursorTop)
-  Write-Host ("🔸" + (" " * ([System.Console]::WindowWidth - 2))) -NoNewline
-  [System.Console]::SetCursorPosition(0, [System.Console]::CursorTop)
+  # Fast-fail timeout so a stalled request doesn't hang the key handler.
+  $generatedCommand = Get-LLMCommand -Description "$currentLine" -TimeoutSec $config.CompletionTimeout
 
   if ($null -eq $generatedCommand)
   {
-    Write-Host "❌ Failed to complete command" -ForegroundColor Red
+    Write-Host "`n❌ Failed to complete command" -ForegroundColor Red
+    [Microsoft.PowerShell.PSConsoleReadLine]::InvokePrompt()
     return
   }
 
-  # Replace current line
+  # Replace current line, then redraw to clear the transient status line.
   Invoke-ReplacePSConsoleReadLineText -Start 0 -Length $currentLine.Length -ReplacementText $generatedCommand
+  [Microsoft.PowerShell.PSConsoleReadLine]::InvokePrompt()
 }
 
 # PSReadLine helper functions for state management
