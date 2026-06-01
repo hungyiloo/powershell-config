@@ -314,7 +314,16 @@ function Build-LLMApiRequest {
     stream = $false
     tools = $tools
     tool_choice = "auto"
-  } | ConvertTo-Json -Depth 10
+  }
+
+  # Thinking suppression. Gemma 4 accepts only "minimal"; other models may want
+  # low/medium/high or none at all. Configurable so a model swap is an env change,
+  # not a code edit. Blank ($env:PSLLM_REASONING_EFFORT = "") omits the field.
+  if (-not [string]::IsNullOrWhiteSpace($config.ReasoningEffort)) {
+    $requestBody.reasoning_effort = $config.ReasoningEffort
+  }
+
+  $requestBody = $requestBody | ConvertTo-Json -Depth 10
 
   # Prepare HTTP headers
   $headers = @{
@@ -423,6 +432,7 @@ function Get-PSLLMConfiguration {
   return @{
     ApiEndpoint = ($env:PSLLM_API_ENDPOINT ?? "https://api.openai.com/v1") + "/chat/completions"
     Model = $env:PSLLM_MODEL ?? "gpt-4o-mini"
+    ReasoningEffort = $env:PSLLM_REASONING_EFFORT ?? "minimal"
     MaxTokens = [int]($env:PSLLM_MAX_TOKENS ?? 500)
     RequestTimeout = [int]($env:PSLLM_REQUEST_TIMEOUT ?? 300)
     NoColors = [bool]($env:PSLLM_NO_COLORS ?? $false)
@@ -764,6 +774,19 @@ function Get-LLMResponse
         } else {
           # No tool calls, use original response
           $responseText = $choice.message.content.Trim()
+
+          # Strip <thought>...</thought> reasoning blocks emitted by thinking models
+          # (e.g. Gemma 4). reasoning_effort="minimal" normally suppresses these at the
+          # source; this strip is defense-in-depth for models/levels that still think.
+          # The real answer always follows </thought>.
+          $responseText = ($responseText -replace '(?s)^.*?</thought>', '').Trim()
+
+          # No closing tag means the reasoning was truncated mid-stream (MaxTokens too
+          # low) and no usable answer follows — treat as a failed response.
+          if ($responseText -match '^<thought>') {
+            Write-Warning "LLM response truncated inside <thought> block; increase PSLLM_MAX_TOKENS"
+            return $null
+          }
         }
 
         if ([string]::IsNullOrWhiteSpace($responseText))
