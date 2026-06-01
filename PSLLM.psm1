@@ -1044,30 +1044,35 @@ function Invoke-LLMCompleteCurrentLine
 
   if ([string]::IsNullOrWhiteSpace($currentLine))
   {
-    Write-Host "`n🤖 Enter a description first, then use Ctrl+Alt+K to insert the last LLM command" -ForegroundColor Yellow
-    [Microsoft.PowerShell.PSConsoleReadLine]::InvokePrompt()
+    Write-Host "🤖 Enter a description first, then use Ctrl+Alt+K to insert the last LLM command" -ForegroundColor Yellow
     return
   }
 
-  # Show a transient status on a fresh line BELOW the buffer. Writing on its own
-  # line (rather than overwriting the buffer's row with WindowWidth math) is safe
-  # regardless of whether the buffer wraps across multiple rows or the terminal
-  # was resized. InvokePrompt() then redraws the prompt and clears the status.
-  Write-Host "`n🤖 Completing with LLM..." -ForegroundColor Yellow -NoNewline
+  # Clear current line in place (no newline — a newline leaves a phantom status row
+  # that lingers until the next full prompt render).
+  [System.Console]::SetCursorPosition(0, [System.Console]::CursorTop)
+  Write-Host (" " * ([System.Console]::WindowWidth - 1)) -NoNewline
+  [System.Console]::SetCursorPosition(0, [System.Console]::CursorTop)
+
+  # Show loading indicator
+  Write-Host "🤖 Completing with LLM..." -ForegroundColor Yellow -NoNewline
 
   # Fast-fail timeout so a stalled request doesn't hang the key handler.
   $generatedCommand = Get-LLMCommand -Description "$currentLine" -TimeoutSec $config.CompletionTimeout
 
+  # Clear loading line
+  [System.Console]::SetCursorPosition(0, [System.Console]::CursorTop)
+  Write-Host ("🔸" + (" " * ([System.Console]::WindowWidth - 2))) -NoNewline
+  [System.Console]::SetCursorPosition(0, [System.Console]::CursorTop)
+
   if ($null -eq $generatedCommand)
   {
-    Write-Host "`n❌ Failed to complete command" -ForegroundColor Red
-    [Microsoft.PowerShell.PSConsoleReadLine]::InvokePrompt()
+    Write-Host "❌ Failed to complete command" -ForegroundColor Red
     return
   }
 
-  # Replace current line, then redraw to clear the transient status line.
+  # Replace current line
   Invoke-ReplacePSConsoleReadLineText -Start 0 -Length $currentLine.Length -ReplacementText $generatedCommand
-  [Microsoft.PowerShell.PSConsoleReadLine]::InvokePrompt()
 }
 
 # PSReadLine helper functions for state management
