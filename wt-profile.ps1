@@ -142,6 +142,30 @@ function script:Get-WtBaseRef {
     return $null
 }
 
+function script:Remove-WtTree {
+    # Delete a directory tree fast. Benchmarked on the ReFS Dev Drive: native
+    # `rmdir /s /q` is ~2x faster than [IO.Directory]::Delete, and parallel
+    # approaches (robocopy /MT, ForEach -Parallel) are SLOWER — ReFS serializes
+    # metadata ops. So: lean native fast-path, with the long-path-aware managed
+    # delete as fallback if rmdir leaves anything behind (deep >260-char paths)
+    # or hits a locked file. Returns $true on a fully-emptied tree.
+    param([string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) { return $true }
+
+    cmd /c "rmdir /s /q `"$Path`"" 2>$null
+    if (-not (Test-Path -LiteralPath $Path)) { return $true }
+
+    # rmdir left residue (long path / locked file) -> robust managed delete.
+    try {
+        [System.IO.Directory]::Delete($Path, $true)
+        return $true
+    } catch {
+        Write-Host "Delete failed: $($_.Exception.Message)" -ForegroundColor Red
+        Write-Host "A file may be locked — is a dev server still running in that worktree? Close it and retry." -ForegroundColor Yellow
+        return $false
+    }
+}
+
 function script:New-WtNewBranch {
     # Create a worktree at $Path on a NEW branch $Branch. Default base is the
     # up-to-date origin default branch; -FromHere forks the current HEAD instead.
@@ -309,16 +333,10 @@ function wt {
                 return
             }
 
-            # Fast native delete (git never walks node_modules); then prune the
+            # Fast native delete (rmdir), managed fallback; then prune the
             # now-dangling worktree admin record.
             Write-Host "Deleting files..." -ForegroundColor Cyan
-            try {
-                [System.IO.Directory]::Delete($w.Path, $true)
-            } catch {
-                Write-Host "Delete failed: $($_.Exception.Message)" -ForegroundColor Red
-                Write-Host "A file may be locked — is a dev server still running in that worktree? Close it and retry." -ForegroundColor Yellow
-                return
-            }
+            if (-not (script:Remove-WtTree $w.Path)) { return }
             git worktree prune --expire now
             Write-Host "Removed worktree '$($w.Name)'." -ForegroundColor Green
 
