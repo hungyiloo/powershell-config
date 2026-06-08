@@ -62,3 +62,6 @@ function y {
 
 # PSLLM setup
 . "$(Split-Path -Path $PROFILE -Parent)\PSLLM-Profile.ps1"
+
+# wt — git worktree helper (list / go / new / rm)
+. "$(Split-Path -Path $PROFILE -Parent)\wt-profile.ps1"
