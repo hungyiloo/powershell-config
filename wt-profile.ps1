@@ -12,12 +12,12 @@
 #                 check it out into worktree 'Q', then cd in
 #   wt new NAME   literal name, NO lookup -> new worktree on a new branch,
 #                 based on the up-to-date origin default branch (main/master)
-#   wt new        no arg -> random scratch worktree (off origin default), cd in
+#   wt new        no arg -> scratch worktree on 'scratch-<slug>' branch, cd in
 #   ... -FromHere on either of the above, branch from current HEAD instead
 #   wt pr ID      alias for 'wt new pr:ID'
 #   wt rm         pick a worktree -> remove it (always confirms) + prune,
 #                 then optionally delete its local branch
-#   wt prune      delete leftover 'worktree-*' scratch branches that are not
+#   wt prune      delete leftover scratch-* / worktree-* branches that are not
 #                 checked out in any live worktree (safe: git branch -d)
 #   wt help       this help
 # ---------------------------------------------------------------------------
@@ -166,6 +166,18 @@ function script:Remove-WtTree {
     }
 }
 
+function script:New-WtSlug {
+    # Readable adjective-noun slug for scratch worktrees, so the name reads as a
+    # throwaway ("amber-otter") and never gets mistaken for a work-item number.
+    $adj  = 'amber','brisk','calm','dusky','eager','fern','glint','hazel','ivory',
+            'jade','keen','lush','misty','noble','ochre','pale','quiet','rust',
+            'sage','teal','umber','vivid','warm','zephyr'
+    $noun = 'otter','finch','heron','lynx','moth','newt','owl','pike','quail',
+            'raven','seal','toad','vole','wren','bison','crane','dove','elk',
+            'fox','gull','hawk','ibis','koi','yak'
+    "{0}-{1}" -f (Get-Random -InputObject $adj), (Get-Random -InputObject $noun)
+}
+
 function script:New-WtNewBranch {
     # Create a worktree at $Path on a NEW branch $Branch. Default base is the
     # up-to-date origin default branch; -FromHere forks the current HEAD instead.
@@ -248,12 +260,14 @@ function wt {
         'new' {
             $root = script:Get-WtMainRoot
 
-            # no arg -> random scratch worktree (new branch), then cd in
+            # no arg -> scratch worktree on a 'scratch-<slug>' branch, then cd in
             if (-not $Arg) {
-                $rand = "worktree-scratch-$(Get-Random -Maximum 99999)"
-                $path = Join-Path $root ".claude/worktrees/$rand"
-                Write-Host "Creating scratch worktree '$rand'..." -ForegroundColor DarkGray
-                if (script:New-WtNewBranch $path $rand -FromHere:$FromHere) { script:Enter-Wt $path }
+                do {
+                    $name = "scratch-$(script:New-WtSlug)"
+                    $path = Join-Path $root ".claude/worktrees/$name"
+                } while (Test-Path $path)
+                Write-Host "Creating scratch worktree '$name'..." -ForegroundColor DarkGray
+                if (script:New-WtNewBranch $path $name -FromHere:$FromHere) { script:Enter-Wt $path }
                 return
             }
 
@@ -350,13 +364,16 @@ function wt {
         }
 
         'prune' {
-            # Delete leftover 'worktree-*' scratch branches (from claude --worktree
-            # / wt new) that aren't checked out in any live worktree.
+            # Delete leftover scratch branches that aren't checked out in any live
+            # worktree: 'scratch-*' (wt new, no arg) and 'worktree-*' (legacy /
+            # claude --worktree). Strip git's leading '*' (current) / '+' (checked
+            # out elsewhere) markers before comparing, or the names never match.
             $live = @(script:Get-WtList | ForEach-Object { $_.Branch })
-            $scratch = @(git branch --list 'worktree-*' | ForEach-Object { $_.Trim().TrimStart('+ ').Trim() })
+            $scratch = @(git branch --list 'scratch-*' 'worktree-*' |
+                ForEach-Object { ($_ -replace '^[*+]?\s*', '').Trim() })
             $orphans = @($scratch | Where-Object { $_ -and ($_ -notin $live) })
 
-            if ($orphans.Count -eq 0) { Write-Host "No orphaned worktree-* scratch branches." -ForegroundColor Green; return }
+            if ($orphans.Count -eq 0) { Write-Host "No orphaned scratch branches." -ForegroundColor Green; return }
 
             Write-Host "Orphaned scratch branches:" -ForegroundColor Yellow
             $orphans | ForEach-Object { Write-Host "  $_" }
@@ -387,12 +404,12 @@ wt — git worktree helper
   wt new wi:14781 fuzzy-match branch *14781* -> worktree '14781' -> cd in
   wt new my-name  literal name, NO lookup -> new branch + worktree -> cd in
                   (based on up-to-date origin default branch: main/master)
-  wt new          random scratch worktree (off origin default) -> cd in
+  wt new          scratch worktree on 'scratch-<slug>' branch -> cd in
   ...  -FromHere  on 'wt new'/'wt new NAME': branch from current HEAD instead
   wt pr 9114      alias for 'wt new pr:9114'
   wt rm           pick a worktree -> confirm -> remove + prune,
                   then optionally delete its local branch
-  wt prune        delete leftover 'worktree-*' scratch branches not
+  wt prune        delete leftover scratch-* / worktree-* branches not
                   checked out in any live worktree (safe: git branch -d)
   wt help         this help
 "@ | Write-Host
