@@ -1,7 +1,8 @@
 # wt — git worktree helper tuned for PR review on Windows
 # ---------------------------------------------------------------------------
-# Commands navigate you INTO a ready worktree (cd + ensure deps). They do not
-# launch anything — once there you run 'claude', 'npm start', 'lg', etc.
+# Commands navigate you INTO a ready worktree (cd + ensure deps). By default
+# they launch nothing — once there you run 'claude', 'npm start', 'lg', etc.
+# Pass -Claude to auto-launch Claude Code in the worktree.
 #
 #   wt            list worktrees (name | branch | state)
 #   wt go         pick an existing worktree -> cd in
@@ -15,6 +16,8 @@
 #   wt new        no arg -> scratch worktree on 'scratch-<slug>' branch, cd in
 #   ... -FromHere on either of the above, branch from current HEAD instead
 #   ... -NoInstall skip the bun install (plain worktree, no node_modules)
+#   ... -Claude   after cd, launch `claude --worktree <leaf>` (attaches to the
+#                 existing tree; picking (main) launches plain `claude`)
 #   wt pr ID      alias for 'wt new pr:ID'
 #   wt rm         pick a worktree -> remove it (always confirms) + prune,
 #                 then optionally delete its local branch
@@ -218,10 +221,14 @@ function script:Find-Branch {
 }
 
 function script:Enter-Wt {
-    # Navigate into a worktree and make sure deps are present. Does NOT launch
-    # anything — you decide (claude / npm start / lg) once you're there.
+    # Navigate into a worktree and make sure deps are present. With -Claude,
+    # also launch Claude Code (otherwise you decide: claude / npm start / lg).
     # -NoInstall skips the bun install (plain worktree, no node_modules needed).
-    param([string]$Path, [switch]$NoInstall)
+    # -Claude launches `claude --worktree <leaf>` — empirically this ATTACHES to
+    # the existing worktree by folder name (branch-agnostic; no duplicate tree),
+    # despite docs implying it only creates. Picking (main) launches plain
+    # `claude` so we never spawn a worktree named after the repo folder.
+    param([string]$Path, [switch]$NoInstall, [switch]$Claude)
     Set-Location -LiteralPath $Path
     if ($NoInstall) {
         Write-Host "Skipping dependency install (-NoInstall)." -ForegroundColor DarkGray
@@ -231,6 +238,19 @@ function script:Enter-Wt {
         bun install --frozen-lockfile
     }
     Write-Host "Ready in $Path" -ForegroundColor Green
+
+    if ($Claude) {
+        $mainRoot = script:Get-WtMainRoot
+        $isMain = ($mainRoot) -and (($Path -replace '\\','/') -eq ($mainRoot -replace '\\','/'))
+        if ($isMain) {
+            Write-Host "Launching claude (main tree)..." -ForegroundColor Cyan
+            claude
+        } else {
+            $leaf = Split-Path $Path -Leaf
+            Write-Host "Launching claude --worktree $leaf..." -ForegroundColor Cyan
+            claude --worktree $leaf
+        }
+    }
 }
 
 function wt {
@@ -239,7 +259,8 @@ function wt {
         [Parameter(Position=0)][string]$Command = '',
         [Parameter(Position=1)][string]$Arg,
         [switch]$FromHere,
-        [switch]$NoInstall
+        [switch]$NoInstall,
+        [switch]$Claude
     )
 
     if (-not (git rev-parse --is-inside-work-tree 2>$null)) {
@@ -255,7 +276,7 @@ function wt {
 
         'go' {
             $w = script:Select-Wt (script:Get-WtList) 'go to worktree> '
-            if ($w) { script:Enter-Wt $w.Path }
+            if ($w) { script:Enter-Wt $w.Path -NoInstall:$NoInstall -Claude:$Claude }
         }
 
         { $_ -in 'root', 'r' } {
@@ -273,12 +294,12 @@ function wt {
                     $path = Join-Path $root ".claude/worktrees/$name"
                 } while (Test-Path $path)
                 Write-Host "Creating scratch worktree '$name'..." -ForegroundColor DarkGray
-                if (script:New-WtNewBranch $path $name -FromHere:$FromHere) { script:Enter-Wt $path -NoInstall:$NoInstall }
+                if (script:New-WtNewBranch $path $name -FromHere:$FromHere) { script:Enter-Wt $path -NoInstall:$NoInstall -Claude:$Claude }
                 return
             }
 
             # pr:<id> -> Azure DevOps PR lookup (delegate to canonical handler)
-            if ($Arg -match '^pr:(.+)$') { wt pr $Matches[1] -NoInstall:$NoInstall; return }
+            if ($Arg -match '^pr:(.+)$') { wt pr $Matches[1] -NoInstall:$NoInstall -Claude:$Claude; return }
 
             # wi:<q> -> fuzzy branch match (local + remote)
             if ($Arg -match '^wi:(.+)$') {
@@ -286,7 +307,7 @@ function wt {
                 $path = Join-Path $root ".claude/worktrees/$q"
                 if (Test-Path $path) {
                     Write-Host "Worktree '$q' already exists -> entering it." -ForegroundColor Yellow
-                    script:Enter-Wt $path -NoInstall:$NoInstall; return
+                    script:Enter-Wt $path -NoInstall:$NoInstall -Claude:$Claude; return
                 }
                 Write-Host "Fetching from origin..." -ForegroundColor Cyan
                 git fetch --all --prune --quiet
@@ -294,7 +315,7 @@ function wt {
                 if ($branch -eq '__CANCELLED__') { Write-Host "Cancelled." -ForegroundColor DarkGray; return }
                 if (-not $branch) { Write-Host "No local or remote branch matches '$q'. (Use 'wt new <name>' to create one.)" -ForegroundColor Yellow; return }
                 Write-Host "Matched branch: $branch" -ForegroundColor Green
-                if (script:New-WtForBranch $path $branch) { script:Enter-Wt $path -NoInstall:$NoInstall }
+                if (script:New-WtForBranch $path $branch) { script:Enter-Wt $path -NoInstall:$NoInstall -Claude:$Claude }
                 return
             }
 
@@ -303,9 +324,9 @@ function wt {
             $path = Join-Path $root ".claude/worktrees/$name"
             if (Test-Path $path) {
                 Write-Host "Worktree '$name' already exists -> entering it." -ForegroundColor Yellow
-                script:Enter-Wt $path -NoInstall:$NoInstall; return
+                script:Enter-Wt $path -NoInstall:$NoInstall -Claude:$Claude; return
             }
-            if (script:New-WtNewBranch $path $name -FromHere:$FromHere) { script:Enter-Wt $path -NoInstall:$NoInstall }
+            if (script:New-WtNewBranch $path $name -FromHere:$FromHere) { script:Enter-Wt $path -NoInstall:$NoInstall -Claude:$Claude }
         }
 
         'pr' {
@@ -318,7 +339,7 @@ function wt {
             $path = Join-Path $root ".claude/worktrees/pr-$prid"
             if (Test-Path $path) {
                 Write-Host "Worktree 'pr-$prid' already exists -> entering it." -ForegroundColor Yellow
-                script:Enter-Wt $path -NoInstall:$NoInstall
+                script:Enter-Wt $path -NoInstall:$NoInstall -Claude:$Claude
                 return
             }
 
@@ -329,7 +350,7 @@ function wt {
             Write-Host "PR !$prid -> $branch" -ForegroundColor Green
 
             git fetch --all --prune --quiet
-            if (script:New-WtForBranch $path $branch) { script:Enter-Wt $path -NoInstall:$NoInstall }
+            if (script:New-WtForBranch $path $branch) { script:Enter-Wt $path -NoInstall:$NoInstall -Claude:$Claude }
         }
 
         'rm' {
@@ -400,8 +421,9 @@ function wt {
             @"
 wt — git worktree helper
 
-  Commands navigate you INTO a ready worktree (cd + deps). They do NOT
-  launch anything — once there, run 'claude', 'npm start', 'lg', etc.
+  Commands navigate you INTO a ready worktree (cd + deps). By default they
+  launch nothing — once there, run 'claude', 'npm start', 'lg', etc.
+  Pass -Claude to auto-launch Claude Code in the worktree.
 
   wt              list worktrees (name | branch | state)
   wt go           pick an existing worktree -> cd in
@@ -413,6 +435,8 @@ wt — git worktree helper
   wt new          scratch worktree on 'scratch-<slug>' branch -> cd in
   ...  -FromHere  on 'wt new'/'wt new NAME': branch from current HEAD instead
   ...  -NoInstall  skip the bun install (plain worktree, no node_modules)
+  ...  -Claude    after cd, launch 'claude --worktree <leaf>' (attaches to the
+                  existing worktree; picking (main) launches plain 'claude')
   wt pr 9114      alias for 'wt new pr:9114'
   wt rm           pick a worktree -> confirm -> remove + prune,
                   then optionally delete its local branch
